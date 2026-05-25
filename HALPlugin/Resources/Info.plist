@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>MixedCaptureAudio</string>
+	<key>CFBundleDisplayName</key>
+	<string>Mixed Capture Audio</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.minamiktr.mca.driver</string>
+	<key>CFBundleExecutable</key>
+	<string>MixedCaptureAudio</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.2</string>
+	<key>MCAHALCompatibilityVersion</key>
+	<integer>1</integer>
+	<key>MCASharedMemoryABIVersion</key>
+	<integer>1</integer>
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>97D5B8EA-05C3-4AF7-8B12-1F7A0E5687A1</key>
+		<string>MixedCaptureAudio_Create</string>
+	</dict>
+	<key>CFPlugInTypes</key>
+	<dict>
+		<key>443ABAB8-E7B3-491A-B985-BEB9187030DB</key>
+		<array>
+			<string>97D5B8EA-05C3-4AF7-8B12-1F7A0E5687A1</string>
+		</array>
+	</dict>
+</dict>
+</plist>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>ProcessTapProof</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.minamiktr.mca.ProcessTapProof</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>ProcessTapProof</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSBackgroundOnly</key>
+  <true/>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>MixedCaptureAudio needs to test system audio capture through a Core Audio process tap.</string>
+</dict>
+</plist>

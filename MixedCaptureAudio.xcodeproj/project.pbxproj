@@ -1,0 +1,216 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXAggregateTarget section */
+		4BCA00000000000000000010 /* MixedCaptureAudioDriver */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 4BCA00000000000000000050 /* Build configuration list for PBXAggregateTarget "MixedCaptureAudioDriver" */;
+			buildPhases = (
+				4BCA00000000000000000020 /* Build HAL Driver */,
+			);
+			dependencies = (
+			);
+			name = MixedCaptureAudioDriver;
+			productName = MixedCaptureAudioDriver;
+		};
+		4BCA00000000000000000060 /* MixedCaptureAudioApp */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = 4BCA00000000000000000080 /* Build configuration list for PBXAggregateTarget "MixedCaptureAudioApp" */;
+			buildPhases = (
+				4BCA00000000000000000070 /* Build App */,
+			);
+			dependencies = (
+			);
+			name = MixedCaptureAudioApp;
+			productName = MixedCaptureAudioApp;
+		};
+/* End PBXAggregateTarget section */
+
+/* Begin PBXGroup section */
+		4BCA00000000000000000030 = {
+			isa = PBXGroup;
+			children = (
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXProject section */
+		4BCA00000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 4BCA00000000000000000040 /* Build configuration list for PBXProject "MixedCaptureAudio" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 4BCA00000000000000000030;
+			productRefGroup = 4BCA00000000000000000030;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4BCA00000000000000000010 /* MixedCaptureAudioDriver */,
+				4BCA00000000000000000060 /* MixedCaptureAudioApp */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4BCA00000000000000000020 /* Build HAL Driver */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(PROJECT_DIR)/HALPlugin/Sources/MixedCaptureAudioDriver.c",
+				"$(PROJECT_DIR)/HALPlugin/Include/MixedAudioSharedMemory.h",
+				"$(PROJECT_DIR)/HALPlugin/Resources/Info.plist",
+				"$(PROJECT_DIR)/Scripts/build-hal-driver.sh",
+			);
+			name = "Build HAL Driver";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(PROJECT_DIR)/Build/$(CONFIGURATION)/MixedCaptureAudio.driver",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "Scripts/build-hal-driver.sh";
+		};
+		4BCA00000000000000000070 /* Build App */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(PROJECT_DIR)/App/Sources/Diagnostics/HealthDiagnostics.swift",
+				"$(PROJECT_DIR)/App/Sources/App/PrerequisiteStatus.swift",
+				"$(PROJECT_DIR)/App/Sources/App/SetupPresentation.swift",
+				"$(PROJECT_DIR)/App/Sources/App/AppPrerequisiteChecker.swift",
+				"$(PROJECT_DIR)/App/Sources/App/MicrophonePermissionRequester.swift",
+				"$(PROJECT_DIR)/App/Sources/App/SystemAudioAccessTester.swift",
+				"$(PROJECT_DIR)/App/Sources/App/AppLiveMixerController.swift",
+				"$(PROJECT_DIR)/App/Sources/App/AppStatusModel.swift",
+				"$(PROJECT_DIR)/App/Sources/App/AppServices.swift",
+				"$(PROJECT_DIR)/App/Sources/App/MixedCaptureAudioApp.swift",
+				"$(PROJECT_DIR)/App/Sources/App/StatusMenuView.swift",
+				"$(PROJECT_DIR)/App/Sources/App/SetupView.swift",
+				"$(PROJECT_DIR)/App/Sources/Audio/LiveMixerSession.m",
+				"$(PROJECT_DIR)/App/Sources/SystemAudio/SystemAudioAccessProbe.m",
+				"$(PROJECT_DIR)/Rust/mixed-audio-engine/src/lib.rs",
+				"$(PROJECT_DIR)/Rust/mixed-audio-engine/src/engine.rs",
+				"$(PROJECT_DIR)/Rust/mixed-audio-engine/src/shared_memory.rs",
+				"$(PROJECT_DIR)/App/Resources/Info.plist",
+				"$(PROJECT_DIR)/Scripts/build-rust-engine.sh",
+				"$(PROJECT_DIR)/Scripts/build-app.sh",
+			);
+			name = "Build App";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(PROJECT_DIR)/Build/$(CONFIGURATION)/MixedCaptureAudio.app",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "Scripts/build-app.sh";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		4BCA00000000000000000041 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				PRODUCT_NAME = MixedCaptureAudio;
+			};
+			name = Debug;
+		};
+		4BCA00000000000000000042 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.2;
+				PRODUCT_NAME = MixedCaptureAudio;
+			};
+			name = Release;
+		};
+		4BCA00000000000000000051 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = MixedCaptureAudioDriver;
+			};
+			name = Debug;
+		};
+		4BCA00000000000000000052 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = MixedCaptureAudioDriver;
+			};
+			name = Release;
+		};
+		4BCA00000000000000000081 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = MixedCaptureAudioApp;
+			};
+			name = Debug;
+		};
+		4BCA00000000000000000082 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = MixedCaptureAudioApp;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4BCA00000000000000000040 /* Build configuration list for PBXProject "MixedCaptureAudio" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4BCA00000000000000000041 /* Debug */,
+				4BCA00000000000000000042 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4BCA00000000000000000050 /* Build configuration list for PBXAggregateTarget "MixedCaptureAudioDriver" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4BCA00000000000000000051 /* Debug */,
+				4BCA00000000000000000052 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4BCA00000000000000000080 /* Build configuration list for PBXAggregateTarget "MixedCaptureAudioApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4BCA00000000000000000081 /* Debug */,
+				4BCA00000000000000000082 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 4BCA00000000000000000001 /* Project object */;
+}

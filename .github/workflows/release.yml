@@ -1,0 +1,166 @@
+name: Release Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing GitHub Release tag to upload the package to
+        required: true
+      version:
+        description: Release version without the leading v
+        required: true
+      build:
+        description: Build number
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: macos-14
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Decode Developer ID certificates
+        env:
+          MCA_APP_P12_BASE64: ${{ secrets.MCA_APP_P12_BASE64 }}
+          MCA_INSTALLER_P12_BASE64: ${{ secrets.MCA_INSTALLER_P12_BASE64 }}
+          MCA_APP_CERT_BASE64: ${{ secrets.MCA_APP_CERT_BASE64 }}
+          MCA_INSTALLER_CERT_BASE64: ${{ secrets.MCA_INSTALLER_CERT_BASE64 }}
+        run: |
+          mkdir -p .Secrets
+          printf '%s' "$MCA_APP_P12_BASE64" | base64 --decode > .Secrets/MCADeveloperIDApplicationSigning.p12
+          printf '%s' "$MCA_INSTALLER_P12_BASE64" | base64 --decode > .Secrets/MCADeveloperIDInstallerSigning.p12
+          printf '%s' "$MCA_APP_CERT_BASE64" | base64 --decode > .Secrets/developerID_application.cer
+          printf '%s' "$MCA_INSTALLER_CERT_BASE64" | base64 --decode > .Secrets/developerID_installer.cer
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o .Secrets/DeveloperIDG2CA.cer
+          curl -fsSL https://www.apple.com/appleca/AppleIncRootCertificate.cer -o .Secrets/AppleIncRootCertificate.cer
+
+          PUBLIC_CERT_KEYCHAIN="$PWD/.Secrets/MCAPublicSigningCerts.keychain-db"
+          PUBLIC_CERT_KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$PUBLIC_CERT_KEYCHAIN_PASSWORD" "$PUBLIC_CERT_KEYCHAIN" >/dev/null
+          security set-keychain-settings -lut 21600 "$PUBLIC_CERT_KEYCHAIN" >/dev/null
+          security unlock-keychain -p "$PUBLIC_CERT_KEYCHAIN_PASSWORD" "$PUBLIC_CERT_KEYCHAIN" >/dev/null
+          security list-keychains -d user 2>/dev/null |
+            sed 's/^[[:space:]]*"//; s/"$//' > /tmp/mca-release-keychains-before-public-certs.txt
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$PUBLIC_CERT_KEYCHAIN" $(cat /tmp/mca-release-keychains-before-public-certs.txt) >/dev/null
+
+          MCA_PUBLIC_CERT_KEYCHAIN="$PUBLIC_CERT_KEYCHAIN" \
+            MCA_SKIP_PUBLIC_CERT_VERIFY=1 \
+            Scripts/install-public-signing-certs.sh
+
+      - name: Decode notarization key
+        env:
+          MCA_NOTARY_KEY_BASE64: ${{ secrets.MCA_NOTARY_KEY_BASE64 }}
+        run: |
+          printf '%s' "$MCA_NOTARY_KEY_BASE64" | base64 --decode > .Secrets/notary-key.p8
+
+      - name: Build signed notarized package
+        env:
+          MCA_P12_PASSWORD: ${{ secrets.MCA_P12_PASSWORD }}
+          MCA_APP_P12_PASSWORD: ${{ secrets.MCA_APP_P12_PASSWORD }}
+          MCA_INSTALLER_P12_PASSWORD: ${{ secrets.MCA_INSTALLER_P12_PASSWORD }}
+          MCA_NOTARY_KEY_PATH: .Secrets/notary-key.p8
+          MCA_NOTARY_KEY_ID: ${{ secrets.MCA_NOTARY_KEY_ID }}
+          MCA_NOTARY_ISSUER_ID: ${{ secrets.MCA_NOTARY_ISSUER_ID }}
+          MCA_TEAM_ID: ${{ secrets.MCA_TEAM_ID }}
+          MCA_VERSION: ${{ inputs.version }}
+          MCA_BUILD_NUMBER: ${{ inputs.build }}
+        run: |
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            Scripts/mca-build release-notarized
+          else
+            Scripts/mca-build release-notarized --version "$MCA_VERSION" --build "$MCA_BUILD_NUMBER"
+          fi
+
+      - name: Check package signature and staple
+        run: |
+          pkgutil --check-signature Build/Packages/*.pkg
+          xcrun stapler validate Build/Packages/*.pkg
+
+      - name: Log package SHA256
+        run: |
+          shasum -a 256 Build/Packages/*.pkg | tee /tmp/mca-release-package-sha256.txt
+          {
+            printf '### Package SHA256\n\n'
+            printf '```text\n'
+            cat /tmp/mca-release-package-sha256.txt
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve release tag
+        id: release
+        run: |
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          else
+            RELEASE_TAG="${{ inputs.release_tag }}"
+          fi
+
+          if [ "$RELEASE_TAG" = "" ]; then
+            printf 'missing release tag\n' >&2
+            exit 1
+          fi
+
+          printf 'release_tag=%s\n' "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Upload package to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="${{ steps.release.outputs.release_tag }}"
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --title "$RELEASE_TAG" \
+              --notes "Notarized MixedCaptureAudio package for $RELEASE_TAG"
+          fi
+          gh release upload "$RELEASE_TAG" Build/Packages/*.pkg --clobber
+
+      - name: Clean up signing and notarization secrets
+        if: always()
+        run: |
+          set +e
+
+          WORKSPACE_ROOT="${GITHUB_WORKSPACE:-$PWD}"
+          SIGNING_DIR="$WORKSPACE_ROOT/Build/Signing"
+          SECRETS_DIR="$WORKSPACE_ROOT/.Secrets"
+          LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+
+          CURRENT_DEFAULT_KEYCHAIN="$(
+            security default-keychain -d user 2>/dev/null |
+              sed 's/^[[:space:]]*"//; s/"$//'
+          )"
+          case "$CURRENT_DEFAULT_KEYCHAIN" in
+            "$SECRETS_DIR"/*|"$SIGNING_DIR"/*)
+              security default-keychain -d user -s "$LOGIN_KEYCHAIN" >/dev/null 2>&1
+              ;;
+          esac
+
+          security list-keychains -d user 2>/dev/null |
+            sed 's/^[[:space:]]*"//; s/"$//' |
+            awk -v secrets="$SECRETS_DIR/" -v signing="$SIGNING_DIR/" \
+              'index($0, secrets) != 1 && index($0, signing) != 1' \
+              > /tmp/mca-release-keychains.txt || true
+          if [ -s /tmp/mca-release-keychains.txt ]; then
+            # shellcheck disable=SC2046
+            security list-keychains -d user -s $(cat /tmp/mca-release-keychains.txt) >/dev/null 2>&1
+          else
+            security list-keychains -d user -s "$LOGIN_KEYCHAIN" >/dev/null 2>&1
+          fi
+
+          if [ -d "$SIGNING_DIR" ]; then
+            find "$SIGNING_DIR" -name '*.keychain-db' -type f -exec security delete-keychain {} \; >/dev/null 2>&1
+            rm -rf "$SIGNING_DIR"
+          fi
+          if [ -d "$SECRETS_DIR" ]; then
+            find "$SECRETS_DIR" -name '*.keychain-db' -type f -exec security delete-keychain {} \; >/dev/null 2>&1
+          fi
+
+          rm -rf "$SECRETS_DIR"
+          rm -f /tmp/mca-release-keychains.txt /tmp/mca-release-keychains-before-public-certs.txt

@@ -1,0 +1,15 @@
+[package]
+name = "mixed-audio-engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mixed_audio_engine"
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+name = "rust-shared-memory-producer"
+path = "src/bin/rust_shared_memory_producer.rs"
+
+[profile.release]
+panic = "abort"

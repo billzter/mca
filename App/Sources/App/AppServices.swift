@@ -1,0 +1,342 @@
+import AppKit
+import AVFoundation
+import Combine
+import CoreAudio
+import SwiftUI
+
+@MainActor
+final class AppServices: ObservableObject {
+    static let shared = AppServices()
+
+    let model: AppStatusModel
+    private let setupWindowPresenter = SetupWindowPresenter()
+    private var healthPollingCancellable: AnyCancellable?
+    private lazy var deviceChangeObserver = DeviceChangeObserver(
+        onDeviceChange: { [weak self] in
+            self?.model.refreshPrerequisites()
+        },
+        onRecoverSettled: { [weak self] in
+            self?.model.recoverAfterDeviceConfigurationChange()
+        },
+        onSleep: { [weak self] in
+            self?.model.stopLiveMixer()
+        }
+    )
+    private lazy var statusItemController = StatusItemController(
+        model: model,
+        openSetup: { [weak self] in
+            self?.showSetupWindow()
+        }
+    )
+
+    private init() {
+        model = AppStatusModel(
+            prerequisiteChecker: AppPrerequisiteChecker(),
+            microphonePermissionRequester: AppMicrophonePermissionRequester(),
+            systemAudioAccessTester: AppSystemAudioAccessTester(),
+            liveMixerController: AppLiveMixerController(),
+            microphoneCatalog: AppMicrophoneCatalog(),
+            microphoneSelectionStore: AppMicrophoneSelectionStore(),
+            systemAudioAccessStore: AppSystemAudioAccessStore(),
+            launchAtStartupController: AppLaunchAtStartupController()
+        )
+    }
+
+    func applicationDidFinishLaunching() {
+        statusItemController.install()
+        deviceChangeObserver.start()
+        startHealthPolling()
+        model.refreshPrerequisites()
+        model.refreshLaunchAtStartupStatus()
+        showSetupWindow()
+    }
+
+    func showSetupWindow() {
+        setupWindowPresenter.show(model: model)
+    }
+
+    private func startHealthPolling() {
+        guard healthPollingCancellable == nil else {
+            return
+        }
+        healthPollingCancellable = Timer.publish(every: 1, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.model.refreshLiveMixerHealth()
+            }
+    }
+}
+
+@MainActor
+private final class DeviceChangeObserver {
+    private let onDeviceChange: () -> Void
+    private let onRecoverSettled: () -> Void
+    private let onSleep: () -> Void
+    private var notificationObservers: [NSObjectProtocol] = []
+    private var isStarted = false
+    private let coreAudioQueue = DispatchQueue(label: "com.minamiktr.mca.device-changes")
+    private let deviceListAddress =
+        AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    private let defaultOutputAddress =
+        AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    private let defaultSystemOutputAddress =
+        AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultSystemOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+    init(
+        onDeviceChange: @escaping () -> Void,
+        onRecoverSettled: @escaping () -> Void,
+        onSleep: @escaping () -> Void
+    ) {
+        self.onDeviceChange = onDeviceChange
+        self.onRecoverSettled = onRecoverSettled
+        self.onSleep = onSleep
+    }
+
+    func start() {
+        guard !isStarted else {
+            return
+        }
+        isStarted = true
+        observeCaptureDeviceNotifications()
+        observeCoreAudioDeviceList()
+        observeSleepWakeNotifications()
+        observeApplicationActivation()
+    }
+
+    private func observeCaptureDeviceNotifications() {
+        let center = NotificationCenter.default
+        notificationObservers.append(
+            center.addObserver(
+                forName: Notification.Name("AVCaptureDeviceWasConnectedNotification"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshSoon()
+                }
+            }
+        )
+        notificationObservers.append(
+            center.addObserver(
+                forName: Notification.Name("AVCaptureDeviceWasDisconnectedNotification"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshSoon()
+                }
+            }
+        )
+    }
+
+    private func observeCoreAudioDeviceList() {
+        observeCoreAudioAddress(deviceListAddress, handler: { [weak self] in
+            self?.refreshSoon()
+        })
+        observeCoreAudioAddress(defaultOutputAddress, handler: { [weak self] in
+            self?.recoverSoon()
+        })
+        observeCoreAudioAddress(defaultSystemOutputAddress, handler: { [weak self] in
+            self?.recoverSoon()
+        })
+    }
+
+    private func observeCoreAudioAddress(
+        _ propertyAddress: AudioObjectPropertyAddress,
+        handler: @escaping @MainActor () -> Void
+    ) {
+        var address = propertyAddress
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            coreAudioQueue
+        ) { _, _ in
+            Task { @MainActor in
+                handler()
+            }
+        }
+    }
+
+    private func observeSleepWakeNotifications() {
+        let center = NSWorkspace.shared.notificationCenter
+        notificationObservers.append(
+            center.addObserver(
+                forName: NSWorkspace.willSleepNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor [weak self] in
+                    self?.onSleep()
+                }
+            }
+        )
+        notificationObservers.append(
+            center.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor [weak self] in
+                    self?.recoverSoon()
+                }
+            }
+        )
+    }
+
+    private func observeApplicationActivation() {
+        notificationObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor [weak self] in
+                    self?.onDeviceChange()
+                }
+            }
+        )
+    }
+
+    private func refreshSoon() {
+        onDeviceChange()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            onDeviceChange()
+        }
+    }
+
+    private func recoverSoon() {
+        onDeviceChange()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            onRecoverSettled()
+        }
+    }
+}
+
+@MainActor
+private final class StatusItemController: NSObject {
+    private let model: AppStatusModel
+    private let openSetup: () -> Void
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private let popover = NSPopover()
+    private var cancellable: AnyCancellable?
+    private var isInstalled = false
+
+    init(model: AppStatusModel, openSetup: @escaping () -> Void) {
+        self.model = model
+        self.openSetup = openSetup
+        super.init()
+    }
+
+    func install() {
+        guard !isInstalled else {
+            return
+        }
+        isInstalled = true
+        configurePopover()
+        configureButton()
+        cancellable = model.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in
+                self?.configureButton()
+            }
+        }
+    }
+
+    private func configurePopover() {
+        popover.behavior = .transient
+        popover.contentSize = NSSize(width: 360, height: 420)
+        popover.contentViewController = NSHostingController(
+            rootView: StatusMenuView(
+                model: model,
+                openSetup: openSetup
+            )
+            .frame(width: 360)
+        )
+    }
+
+    private func configureButton() {
+        guard let button = statusItem.button else {
+            return
+        }
+        button.title = "MCA"
+        button.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        button.image = NSImage(
+            systemSymbolName: model.menuBarSystemImage,
+            accessibilityDescription: "MixedCaptureAudio"
+        )
+        button.imagePosition = .imageLeading
+        button.target = self
+        button.action = #selector(togglePopover(_:))
+        button.toolTip = "MixedCaptureAudio"
+    }
+
+    @objc private func togglePopover(_ sender: NSStatusBarButton) {
+        if popover.isShown {
+            popover.performClose(sender)
+        } else {
+            popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+            popover.contentViewController?.view.window?.makeKey()
+        }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { @MainActor in
+            AppServices.shared.applicationDidFinishLaunching()
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        Task { @MainActor in
+            AppServices.shared.showSetupWindow()
+        }
+        return true
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Task { @MainActor in
+            AppServices.shared.model.stopLiveMixer()
+        }
+    }
+}
+
+@MainActor
+private final class SetupWindowPresenter {
+    private var window: NSWindow?
+
+    func show(model: AppStatusModel) {
+        let setupWindow = window ?? makeWindow(model: model)
+        window = setupWindow
+        setupWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func makeWindow(model: AppStatusModel) -> NSWindow {
+        let hostingView = NSHostingView(rootView: SetupView(model: model))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "MixedCaptureAudio Setup"
+        window.contentView = hostingView
+        window.isReleasedWhenClosed = false
+        window.center()
+        return window
+    }
+}

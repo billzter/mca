@@ -1,0 +1,150 @@
+#!/bin/sh
+set -eu
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
+
+COMMAND="${1:-help}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+usage() {
+  cat <<'EOF'
+Usage:
+  Scripts/mca-build verify
+  Scripts/mca-build package [--version X.Y.Z] [--build N]
+  Scripts/mca-build release [--version X.Y.Z] [--build N]
+  Scripts/mca-build notarize [--version X.Y.Z] [--build N]
+  Scripts/mca-build release-notarized [--version X.Y.Z] [--build N]
+  Scripts/mca-build version [--version X.Y.Z] [--build N]
+
+Version inputs:
+  --version or MCA_VERSION override product CFBundleShortVersionString.
+  --build or MCA_BUILD_NUMBER override product CFBundleVersion.
+  If omitted, version is derived from an exact git tag like v0.2.0, then App/Resources/Info.plist.
+  If omitted, build number is derived from GITHUB_RUN_NUMBER, then git commit count, then App/Resources/Info.plist.
+
+Release signing inputs:
+  MCA_APP_P12_PASSWORD and MCA_INSTALLER_P12_PASSWORD, or shared MCA_P12_PASSWORD.
+  Optional MCA_APP_P12_PATH and MCA_INSTALLER_P12_PATH override .Secrets defaults.
+
+Notarization inputs:
+  MCA_NOTARY_KEY_PATH, MCA_NOTARY_KEY_ID, MCA_NOTARY_ISSUER_ID, and MCA_TEAM_ID.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version)
+      test "$#" -ge 2 || {
+        printf 'missing value for --version\n' >&2
+        exit 2
+      }
+      MCA_VERSION="$2"
+      shift 2
+      ;;
+    --build)
+      test "$#" -ge 2 || {
+        printf 'missing value for --build\n' >&2
+        exit 2
+      }
+      MCA_BUILD_NUMBER="$2"
+      shift 2
+      ;;
+    --help|-h)
+      COMMAND="help"
+      shift
+      ;;
+    *)
+      printf 'unknown argument: %s\n' "$1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+source_plist_value() {
+  plutil -extract "$1" raw -o - App/Resources/Info.plist
+}
+
+resolve_version() {
+  if [ "${MCA_VERSION:-}" = "" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+    case "${GITHUB_REF_NAME:-}" in
+      v[0-9]*)
+        MCA_VERSION="${GITHUB_REF_NAME#v}"
+        ;;
+    esac
+  fi
+  if [ "${MCA_VERSION:-}" = "" ]; then
+    TAG="$(git describe --tags --exact-match 2>/dev/null || true)"
+    case "$TAG" in
+      v[0-9]*)
+        MCA_VERSION="${TAG#v}"
+        ;;
+    esac
+  fi
+  if [ "${MCA_VERSION:-}" = "" ]; then
+    MCA_VERSION="$(source_plist_value CFBundleShortVersionString)"
+  fi
+
+  if [ "${MCA_BUILD_NUMBER:-}" = "" ] && [ "${GITHUB_RUN_NUMBER:-}" != "" ]; then
+    MCA_BUILD_NUMBER="$GITHUB_RUN_NUMBER"
+  fi
+  if [ "${MCA_BUILD_NUMBER:-}" = "" ]; then
+    MCA_BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || true)"
+  fi
+  if [ "${MCA_BUILD_NUMBER:-}" = "" ]; then
+    MCA_BUILD_NUMBER="$(source_plist_value CFBundleVersion)"
+  fi
+
+  export MCA_VERSION
+  export MCA_BUILD_NUMBER
+}
+
+case "$COMMAND" in
+  help)
+    usage
+    ;;
+  version)
+    resolve_version
+    printf 'MCA_VERSION=%s\n' "$MCA_VERSION"
+    printf 'MCA_BUILD_NUMBER=%s\n' "$MCA_BUILD_NUMBER"
+    ;;
+  verify)
+    Scripts/validate-rust-engine.sh
+    Scripts/validate-app.sh
+    Scripts/validate-build-system.sh
+    Scripts/validate-packaging.sh
+    Scripts/validate-build-orchestration.sh
+    Scripts/validate-signing-config.sh
+    Scripts/validate-notarization-config.sh
+    ;;
+  package)
+    resolve_version
+    printf 'building package version=%s build=%s\n' "$MCA_VERSION" "$MCA_BUILD_NUMBER"
+    CONFIGURATION=Release Scripts/package-installer.sh
+    ;;
+  release)
+    resolve_version
+    printf 'building signed package version=%s build=%s\n' "$MCA_VERSION" "$MCA_BUILD_NUMBER"
+    CONFIGURATION=Release Scripts/package-signed-installer.sh
+    printf 'signed package complete. Notarization/stapling is the next release step.\n'
+    ;;
+  notarize)
+    resolve_version
+    printf 'notarizing package version=%s build=%s\n' "$MCA_VERSION" "$MCA_BUILD_NUMBER"
+    CONFIGURATION=Release Scripts/notarize-package.sh
+    ;;
+  release-notarized)
+    resolve_version
+    printf 'building signed notarized package version=%s build=%s\n' "$MCA_VERSION" "$MCA_BUILD_NUMBER"
+    CONFIGURATION=Release Scripts/package-signed-installer.sh
+    CONFIGURATION=Release Scripts/notarize-package.sh
+    ;;
+  *)
+    printf 'unknown command: %s\n' "$COMMAND" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
