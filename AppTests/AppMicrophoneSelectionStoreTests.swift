@@ -5,6 +5,7 @@ struct AppMicrophoneSelectionStoreTests {
     static func main() {
         testPriorityOrderDoesNotOverwriteSelectedMicrophone()
         testLegacySelectedMicrophoneSeedsPriorityWhenPriorityIsMissing()
+        testAppAudioSelectionPersistsModeAndBundleIDs()
         print("microphone selection store tests passed")
     }
 
@@ -27,6 +28,19 @@ struct AppMicrophoneSelectionStoreTests {
         store.selectedMicrophoneID = "usb"
 
         assertEqual(store.preferredMicrophoneIDs, ["usb"])
+    }
+
+    private static func testAppAudioSelectionPersistsModeAndBundleIDs() {
+        let defaults = isolatedDefaults()
+        let store = AppAudioSelectionStore(defaults: defaults)
+
+        store.captureMode = .selectedApps
+        store.selectedAppBundleIDs = ["com.apple.Music", "com.tinyspeck.slackmacgap"]
+
+        let reloaded = AppAudioSelectionStore(defaults: defaults)
+
+        assertEqual(reloaded.captureMode, .selectedApps)
+        assertEqual(reloaded.selectedAppBundleIDs, ["com.apple.Music", "com.tinyspeck.slackmacgap"])
     }
 
     private static func isolatedDefaults() -> UserDefaults {

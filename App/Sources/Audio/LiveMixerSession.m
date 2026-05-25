@@ -24,7 +24,8 @@ enum {
     kMCAMicBufferCount = 3,
     kMCASharedMemoryCapacityFrames = 12000,
     kMCAMaxWriteFrames = 2400,
-    kMCAMaxTapScratchFrames = 4096
+    kMCAMaxTapScratchFrames = 4096,
+    kMCAProgramGraphFadeFrames = 480
 };
 
 typedef struct MCALiveMixerContext {
@@ -39,6 +40,7 @@ typedef struct MCALiveMixerContext {
     AudioStreamBasicDescription tapFormat;
     AudioStreamBasicDescription micFormat;
     MixedAudioSessionHandle *session;
+    UInt32 graphFadeInFramesRemaining;
     float tapScratch[kMCAMaxTapScratchFrames * kMCAOutputChannels];
 } MCALiveMixerContext;
 
@@ -97,6 +99,126 @@ static AudioObjectID MCACopyCurrentProcessObject(void)
                                                  &dataSize,
                                                  &processObjectID);
     return status == noErr ? processObjectID : kAudioObjectUnknown;
+}
+
+static CFStringRef MCACopyProcessBundleID(AudioObjectID processObjectID)
+{
+    AudioObjectPropertyAddress address = {
+        .mSelector = kAudioProcessPropertyBundleID,
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain
+    };
+    CFStringRef bundleID = NULL;
+    UInt32 dataSize = sizeof(bundleID);
+    OSStatus status = AudioObjectGetPropertyData(processObjectID,
+                                                 &address,
+                                                 0,
+                                                 NULL,
+                                                 &dataSize,
+                                                 &bundleID);
+    return status == noErr ? bundleID : NULL;
+}
+
+static NSArray<NSString *> *MCAParseBundleIDList(const char *encodedBundleIDs)
+{
+    if (encodedBundleIDs == NULL || encodedBundleIDs[0] == '\0') {
+        return @[];
+    }
+
+    NSString *encoded = [NSString stringWithUTF8String:encodedBundleIDs];
+    if (encoded == nil) {
+        return @[];
+    }
+
+    NSArray<NSString *> *parts = [encoded componentsSeparatedByString:@"\n"];
+    NSMutableArray<NSString *> *result = [NSMutableArray array];
+    for (NSString *part in parts) {
+        NSString *bundleID = [part stringByTrimmingCharactersInSet:
+                              [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (bundleID.length == 0 || [result containsObject:bundleID]) {
+            continue;
+        }
+        [result addObject:bundleID];
+    }
+    return result;
+}
+
+static NSArray<NSNumber *> *MCACopyProcessObjectIDsForBundleIDs(NSArray<NSString *> *bundleIDs,
+                                                                AudioObjectID ownProcessObject)
+{
+    if (bundleIDs.count == 0) {
+        return @[];
+    }
+
+    NSMutableSet<NSString *> *selectedBundleIDs = [NSMutableSet setWithArray:bundleIDs];
+    AudioObjectPropertyAddress address = {
+        .mSelector = kAudioHardwarePropertyProcessObjectList,
+        .mScope = kAudioObjectPropertyScopeGlobal,
+        .mElement = kAudioObjectPropertyElementMain
+    };
+    UInt32 dataSize = 0;
+    OSStatus status = AudioObjectGetPropertyDataSize(kAudioObjectSystemObject,
+                                                     &address,
+                                                     0,
+                                                     NULL,
+                                                     &dataSize);
+    if (status != noErr || dataSize < sizeof(AudioObjectID)) {
+        return @[];
+    }
+
+    UInt32 processCount = dataSize / sizeof(AudioObjectID);
+    AudioObjectID *processes = (AudioObjectID *)calloc(processCount, sizeof(AudioObjectID));
+    if (processes == NULL) {
+        return @[];
+    }
+
+    status = AudioObjectGetPropertyData(kAudioObjectSystemObject,
+                                        &address,
+                                        0,
+                                        NULL,
+                                        &dataSize,
+                                        processes);
+    if (status != noErr) {
+        free(processes);
+        return @[];
+    }
+
+    NSMutableArray<NSNumber *> *result = [NSMutableArray array];
+    for (UInt32 i = 0; i < processCount; i++) {
+        AudioObjectID processObject = processes[i];
+        if (processObject == kAudioObjectUnknown || processObject == ownProcessObject) {
+            continue;
+        }
+
+        CFStringRef bundleIDRef = MCACopyProcessBundleID(processObject);
+        if (bundleIDRef == NULL) {
+            continue;
+        }
+        NSString *bundleID = CFBridgingRelease(bundleIDRef);
+        if ([selectedBundleIDs containsObject:bundleID]) {
+            [result addObject:[NSNumber numberWithUnsignedInt:processObject]];
+        }
+    }
+
+    free(processes);
+    return result;
+}
+
+static void MCAApplySelectedAppRestoreHints(CATapDescription *tapDescription,
+                                            NSArray<NSString *> *bundleIDs)
+{
+    if (tapDescription == nil || bundleIDs.count == 0) {
+        return;
+    }
+
+#if defined(MAC_OS_VERSION_26_0)
+    if (@available(macOS 26.0, *)) {
+        tapDescription.bundleIDs = bundleIDs;
+        tapDescription.processRestoreEnabled = YES;
+    }
+#else
+    (void)bundleIDs;
+#endif
 }
 
 static bool MCACopyFirstStreamFormat(AudioObjectID deviceID,
@@ -190,6 +312,51 @@ static void MCAResetRustSources(MCALiveMixerContext *context)
     if (context->session != NULL) {
         (void)mixed_audio_session_reset_sources(context->session);
     }
+    context->graphFadeInFramesRemaining = 0;
+    pthread_mutex_unlock(&context->mutex);
+}
+
+static void MCAArmProgramGraphFadeIn(MCALiveMixerContext *context)
+{
+    pthread_mutex_lock(&context->mutex);
+    context->graphFadeInFramesRemaining = kMCAProgramGraphFadeFrames;
+    pthread_mutex_unlock(&context->mutex);
+}
+
+static void MCAApplyProgramGraphFadeInLocked(MCALiveMixerContext *context,
+                                             float *samples,
+                                             UInt32 frames)
+{
+    if (context->graphFadeInFramesRemaining == 0 || samples == NULL || frames == 0) {
+        return;
+    }
+
+    UInt32 fadeFrames = context->graphFadeInFramesRemaining < frames
+                            ? context->graphFadeInFramesRemaining
+                            : frames;
+    UInt32 fadeCompleted = kMCAProgramGraphFadeFrames - context->graphFadeInFramesRemaining;
+    for (UInt32 frame = 0; frame < fadeFrames; frame++) {
+        float gain = (float)(fadeCompleted + frame + 1) / (float)kMCAProgramGraphFadeFrames;
+        samples[(size_t)frame * kMCAOutputChannels] *= gain;
+        samples[(size_t)frame * kMCAOutputChannels + 1] *= gain;
+    }
+    context->graphFadeInFramesRemaining -= fadeFrames;
+}
+
+static void MCAWriteProgramGraphBridgeSilence(MCALiveMixerContext *context)
+{
+    if (context == NULL || context->session == NULL) {
+        return;
+    }
+
+    float silence[kMCAProgramGraphFadeFrames * kMCAOutputChannels] = { 0 };
+    pthread_mutex_lock(&context->mutex);
+    if (context->running && context->session != NULL) {
+        (void)mixed_audio_session_push_system_interleaved_stereo(context->session,
+                                                                 silence,
+                                                                 kMCAProgramGraphFadeFrames);
+        (void)mixed_audio_session_mix_and_write(context->session, kMCAProgramGraphFadeFrames);
+    }
     pthread_mutex_unlock(&context->mutex);
 }
 
@@ -202,7 +369,23 @@ static void MCAPushSystemAndWrite(MCALiveMixerContext *context,
     }
 
     pthread_mutex_lock(&context->mutex);
-    (void)mixed_audio_session_push_system_interleaved_stereo(context->session, samples, frames);
+    const float *samplesToPush = samples;
+    if (context->graphFadeInFramesRemaining > 0) {
+        if (frames <= kMCAMaxTapScratchFrames) {
+            if (samples != context->tapScratch) {
+                memcpy(context->tapScratch,
+                       samples,
+                       sizeof(float) * frames * kMCAOutputChannels);
+            }
+            MCAApplyProgramGraphFadeInLocked(context, context->tapScratch, frames);
+            samplesToPush = context->tapScratch;
+        } else {
+            context->graphFadeInFramesRemaining = 0;
+        }
+    }
+    (void)mixed_audio_session_push_system_interleaved_stereo(context->session,
+                                                            samplesToPush,
+                                                            frames);
     (void)mixed_audio_session_mix_and_write(context->session, frames);
     pthread_mutex_unlock(&context->mutex);
 }
@@ -371,6 +554,7 @@ static bool MCAStartMicrophoneQueue(MCALiveMixerContext *context, const char *mi
 
 static void MCAStopSourceGraph(MCALiveMixerContext *context)
 {
+    MCAWriteProgramGraphBridgeSilence(context);
     atomic_store(&context->micStopping, true);
     if (context->aggregateID != kAudioObjectUnknown && context->ioProcID != NULL) {
         (void)AudioDeviceStop(context->aggregateID, context->ioProcID);
@@ -396,6 +580,7 @@ static void MCAStopSourceGraph(MCALiveMixerContext *context)
     memset(context->micBuffers, 0, sizeof(context->micBuffers));
     memset(&context->tapFormat, 0, sizeof(context->tapFormat));
     memset(&context->micFormat, 0, sizeof(context->micFormat));
+    context->graphFadeInFramesRemaining = 0;
     context->running = false;
     pthread_mutex_unlock(&context->mutex);
 }
@@ -416,7 +601,9 @@ static void MCACleanup(MCALiveMixerContext *context)
     MCADestroyRustSession(context);
 }
 
-int32_t MCA_LiveMixerStart(const char *microphoneUID)
+int32_t MCA_LiveMixerStart(const char *microphoneUID,
+                           int32_t captureMode,
+                           const char *selectedAppBundleIDs)
 {
     pthread_once(&gMixerOnce, MCAInitMixer);
 
@@ -437,8 +624,17 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID)
 
         NSUUID *tapUUID = [NSUUID UUID];
         NSString *tapUID = [tapUUID UUIDString];
-        CATapDescription *tapDescription =
-            [[CATapDescription alloc] initStereoGlobalTapButExcludeProcesses:excludedProcesses];
+        CATapDescription *tapDescription = nil;
+        if (captureMode == 1) {
+            NSArray<NSString *> *bundleIDs = MCAParseBundleIDList(selectedAppBundleIDs);
+            NSArray<NSNumber *> *includedProcesses =
+                MCACopyProcessObjectIDsForBundleIDs(bundleIDs, ownProcessObject);
+            tapDescription = [[CATapDescription alloc] initStereoMixdownOfProcesses:includedProcesses];
+            MCAApplySelectedAppRestoreHints(tapDescription, bundleIDs);
+        } else {
+            tapDescription =
+                [[CATapDescription alloc] initStereoGlobalTapButExcludeProcesses:excludedProcesses];
+        }
         tapDescription.name = @"MixedCaptureAudio Live Mixer";
         tapDescription.UUID = tapUUID;
         tapDescription.privateTap = YES;
@@ -496,6 +692,7 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID)
             }
         }
 
+        MCAArmProgramGraphFadeIn(&gMixer);
         status = AudioDeviceStart(gMixer.aggregateID, gMixer.ioProcID);
         if (status != noErr) {
             MCAStopSourceGraph(&gMixer);
@@ -513,6 +710,16 @@ void MCA_LiveMixerStop(void)
 {
     pthread_once(&gMixerOnce, MCAInitMixer);
     MCACleanup(&gMixer);
+}
+
+int32_t MCA_LiveMixerSupportsSelectedAppProcessRestore(void)
+{
+#if defined(MAC_OS_VERSION_26_0)
+    if (@available(macOS 26.0, *)) {
+        return 1;
+    }
+#endif
+    return 0;
 }
 
 int32_t MCA_LiveMixerCopyHealthCounters(uint64_t *outCounters, uint32_t counterCount)

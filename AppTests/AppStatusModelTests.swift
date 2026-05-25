@@ -10,13 +10,23 @@ struct AppStatusModelTests {
         await testSystemAudioAccessTestMapsSilentCaptureToSilentGuidance()
         await testPrerequisiteRefreshPublishesDeviceNames()
         await testPrerequisiteRefreshPublishesDriverUpdateRequirement()
-        await testLiveMixerWaitsWhenSystemAudioSetupIsUnverified()
+        await testLiveMixerStartsWhenSystemAudioSetupIsUnverified()
         await testLiveMixerStartsWhenDurableSetupIsComplete()
+        await testLiveMixerStartFailureMarksSystemAudioFailed()
         await testLiveMixerStartCompletionIsAsynchronous()
         await testStaleLiveMixerStartCompletionIsIgnored()
         await testLiveMixerStopCompletionIsAsynchronous()
         await testLiveMixerStopsWhenDurableSetupBecomesIncomplete()
         await testSelectingMicrophoneRestartsLiveMixerWithSelection()
+        await testSelectedAppCaptureModeStartsMixerWithSelectedBundleIDs()
+        await testChangingSelectedAppsRestartsRunningMixer()
+        await testSelectedAppModeWithoutSelectionDoesNotStartMixer()
+        await testSelectedAppDisplayListHidesUnselectedAppsAndKeepsUnavailableSelections()
+        await testUnrelatedAppLaunchDoesNotRestartSelectedAppMixer()
+        await testSelectedAppLaunchRestartsSelectedAppMixer()
+        await testSelectedAppQuitRestartsDegradesAndKeepsSelection()
+        await testSelectedAppRelaunchCapturesAgainWithoutReselecting()
+        await testSelectedAppProcessRestoreAvoidsGraphRestart()
         await testSelectedMicrophoneUnplugUsesTemporaryFallback()
         await testSelectedMicrophoneReturnRestoresSavedSelection()
         await testSelectedMicrophoneUnplugWithoutFallbackNeedsAttention()
@@ -149,6 +159,7 @@ struct AppStatusModelTests {
     }
 
     private static func testSystemAudioAccessTestMapsSilentCaptureToSilentGuidance() async {
+        let controller = FakeLiveMixerController()
         let model = AppStatusModel(
             prerequisiteChecker: FakePrerequisiteChecker(
                 snapshots: [
@@ -161,7 +172,8 @@ struct AppStatusModelTests {
                 ]
             ),
             microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
-            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .silent)
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .silent),
+            liveMixerController: controller
         )
 
         model.refreshPrerequisites()
@@ -169,7 +181,9 @@ struct AppStatusModelTests {
 
         assertEqual(model.systemAudioAccess, .silent)
         assertStringContains(model.systemAudioGuidance ?? "", "Play any sound")
-        assertEqual(model.sessionState, .stopped)
+        assertEqual(model.sessionState, .ready)
+        assertEqual(model.liveMixerState, .running)
+        assertEqual(controller.startCount, 1)
     }
 
     private static func testPrerequisiteRefreshPublishesDeviceNames() async {
@@ -197,7 +211,7 @@ struct AppStatusModelTests {
         assertEqual(model.selectedMicrophoneName, "Studio Mic")
     }
 
-    private static func testLiveMixerWaitsWhenSystemAudioSetupIsUnverified() async {
+    private static func testLiveMixerStartsWhenSystemAudioSetupIsUnverified() async {
         let controller = FakeLiveMixerController()
         let model = AppStatusModel(
             prerequisiteChecker: FakePrerequisiteChecker(
@@ -217,8 +231,10 @@ struct AppStatusModelTests {
 
         model.refreshPrerequisites()
 
-        assertEqual(controller.startCount, 0)
-        assertEqual(model.liveMixerState, .stopped)
+        assertEqual(controller.startCount, 1)
+        assertEqual(model.liveMixerState, .running)
+        assertEqual(model.sessionState, .ready)
+        assertEqual(model.systemAudioAccess, .notTested)
     }
 
     private static func testLiveMixerStartsWhenDurableSetupIsComplete() async {
@@ -244,6 +260,24 @@ struct AppStatusModelTests {
 
         assertEqual(controller.startCount, 1)
         assertEqual(model.liveMixerState, .running)
+    }
+
+    private static func testLiveMixerStartFailureMarksSystemAudioFailed() async {
+        let controller = FakeLiveMixerController()
+        controller.startResult = .failed
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller
+        )
+
+        model.refreshPrerequisites()
+
+        assertEqual(controller.startCount, 1)
+        assertEqual(model.liveMixerState, .failed)
+        assertEqual(model.sessionState, .failed)
+        assertEqual(model.systemAudioAccess, .failed)
     }
 
     private static func testLiveMixerStartCompletionIsAsynchronous() async {
@@ -405,6 +439,254 @@ struct AppStatusModelTests {
         assertEqual(controller.stopCount, 1)
         assertEqual(controller.lastStartedMicrophoneID, "mic-b")
         assertEqual(model.selectedMicrophoneName, "Headset Mic")
+    }
+
+    private static func testSelectedAppCaptureModeStartsMixerWithSelectedBundleIDs() async {
+        let controller = FakeLiveMixerController()
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: FakeAppAudioSourceCatalog(
+                sources: [
+                    AppAudioSource(bundleID: "com.apple.Music", name: "Music"),
+                    AppAudioSource(bundleID: "com.apple.Safari", name: "Safari"),
+                ]
+            ),
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+
+        assertEqual(model.captureMode, .selectedApps)
+        assertEqual(model.appAudioSourceItems.map(\.bundleID), ["com.apple.Music", "com.apple.Safari"])
+        assertEqual(controller.lastStartedConfiguration?.captureMode, .selectedApps)
+        assertEqual(controller.lastStartedConfiguration?.selectedAppBundleIDs, ["com.apple.Music"])
+    }
+
+    private static func testChangingSelectedAppsRestartsRunningMixer() async {
+        let controller = FakeLiveMixerController()
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: FakeAppAudioSourceCatalog(
+                sources: [
+                    AppAudioSource(bundleID: "com.apple.Music", name: "Music"),
+                    AppAudioSource(bundleID: "com.apple.Safari", name: "Safari"),
+                ]
+            ),
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        model.toggleAppAudioSource(bundleID: "com.apple.Safari")
+
+        assertEqual(controller.startCount, 2)
+        assertEqual(controller.stopCount, 1)
+        assertEqual(controller.lastStartedConfiguration?.selectedAppBundleIDs, ["com.apple.Music", "com.apple.Safari"])
+    }
+
+    private static func testSelectedAppModeWithoutSelectionDoesNotStartMixer() async {
+        let controller = FakeLiveMixerController()
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: FakeAppAudioSourceCatalog(
+                sources: [
+                    AppAudioSource(bundleID: "com.apple.Music", name: "Music"),
+                ]
+            ),
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+
+        assertEqual(controller.startCount, 0)
+        assertEqual(model.sessionState, .stopped)
+        assertEqual(model.liveMixerState, .stopped)
+    }
+
+    private static func testSelectedAppDisplayListHidesUnselectedAppsAndKeepsUnavailableSelections() async {
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music", "com.example.Missing"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            appAudioSourceCatalog: FakeAppAudioSourceCatalog(
+                sources: [
+                    AppAudioSource(bundleID: "com.apple.Music", name: "Music"),
+                    AppAudioSource(bundleID: "com.apple.Safari", name: "Safari"),
+                ]
+            ),
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+
+        assertEqual(model.selectedAppAudioSourceItems.map(\.bundleID), ["com.apple.Music", "com.example.Missing"])
+        assertEqual(model.selectedAppAudioSourceItems.map(\.isAvailable), [true, false])
+    }
+
+    private static func testUnrelatedAppLaunchDoesNotRestartSelectedAppMixer() async {
+        let controller = FakeLiveMixerController()
+        let catalog = MutableFakeAppAudioSourceCatalog(
+            sources: [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
+        )
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: catalog,
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        catalog.sources = [
+            AppAudioSource(bundleID: "com.apple.Music", name: "Music"),
+            AppAudioSource(bundleID: "com.apple.Safari", name: "Safari"),
+        ]
+        model.recoverAfterApplicationAudioSourceChange()
+
+        assertEqual(controller.startCount, 1)
+        assertEqual(controller.stopCount, 0)
+        assertEqual(model.appAudioSourceItems.map(\.bundleID), ["com.apple.Music", "com.apple.Safari"])
+    }
+
+    private static func testSelectedAppLaunchRestartsSelectedAppMixer() async {
+        let controller = FakeLiveMixerController()
+        let catalog = MutableFakeAppAudioSourceCatalog(sources: [])
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: catalog,
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        catalog.sources = [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
+        model.recoverAfterApplicationAudioSourceChange()
+
+        assertEqual(controller.startCount, 2)
+        assertEqual(controller.lastStartedConfiguration?.selectedAppBundleIDs, ["com.apple.Music"])
+        assertEqual(model.sessionState, .ready)
+    }
+
+    private static func testSelectedAppQuitRestartsDegradesAndKeepsSelection() async {
+        let controller = FakeLiveMixerController()
+        let catalog = MutableFakeAppAudioSourceCatalog(
+            sources: [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
+        )
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: catalog,
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        catalog.sources = []
+        model.recoverAfterApplicationAudioSourceChange()
+
+        assertEqual(controller.startCount, 2)
+        assertEqual(appStore.selectedAppBundleIDs, ["com.apple.Music"])
+        assertEqual(model.selectedAppAudioSourceItems.map(\.bundleID), ["com.apple.Music"])
+        assertEqual(model.selectedAppAudioSourceItems.map(\.isAvailable), [false])
+        assertEqual(model.sessionState, .degraded)
+    }
+
+    private static func testSelectedAppRelaunchCapturesAgainWithoutReselecting() async {
+        let controller = FakeLiveMixerController()
+        let catalog = MutableFakeAppAudioSourceCatalog(sources: [])
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: catalog,
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        catalog.sources = [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
+        model.recoverAfterApplicationAudioSourceChange()
+
+        assertEqual(appStore.selectedAppBundleIDs, ["com.apple.Music"])
+        assertEqual(controller.startCount, 2)
+        assertEqual(controller.lastStartedConfiguration?.selectedAppBundleIDs, ["com.apple.Music"])
+        assertEqual(model.sessionState, .ready)
+    }
+
+    private static func testSelectedAppProcessRestoreAvoidsGraphRestart() async {
+        let controller = FakeLiveMixerController()
+        controller.supportsSelectedAppProcessRestore = true
+        let catalog = MutableFakeAppAudioSourceCatalog(sources: [])
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: catalog,
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        catalog.sources = [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
+        model.recoverAfterApplicationAudioSourceChange()
+        catalog.sources = []
+        model.recoverAfterApplicationAudioSourceChange()
+        catalog.sources = [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
+        model.recoverAfterApplicationAudioSourceChange()
+
+        assertEqual(controller.startCount, 1)
+        assertEqual(controller.stopCount, 0)
+        assertEqual(appStore.selectedAppBundleIDs, ["com.apple.Music"])
+        assertEqual(model.selectedAppAudioSourceItems.map(\.bundleID), ["com.apple.Music"])
+        assertEqual(model.selectedAppAudioSourceItems.map(\.isAvailable), [true])
+        assertEqual(model.sessionState, .ready)
     }
 
     private static func testSelectedMicrophoneUnplugUsesTemporaryFallback() async {
@@ -1064,6 +1346,8 @@ private final class FakeLiveMixerController: LiveMixerControlling {
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private(set) var lastStartedMicrophoneID: String?
+    private(set) var lastStartedConfiguration: LiveMixerStartConfiguration?
+    var supportsSelectedAppProcessRestore = false
     var startResult: LiveMixerStartResult = .started
     var healthSnapshot: HealthSnapshot?
     private var isRunning = false
@@ -1074,12 +1358,16 @@ private final class FakeLiveMixerController: LiveMixerControlling {
         self.automaticallyComplete = automaticallyComplete
     }
 
-    @MainActor func start(microphoneID: String?, completion: @MainActor @escaping (LiveMixerStartResult) -> Void) {
+    @MainActor func start(
+        configuration: LiveMixerStartConfiguration,
+        completion: @MainActor @escaping (LiveMixerStartResult) -> Void
+    ) {
         if isRunning {
             stopCount += 1
         }
         startCount += 1
-        lastStartedMicrophoneID = microphoneID
+        lastStartedMicrophoneID = configuration.microphoneID
+        lastStartedConfiguration = configuration
         if automaticallyComplete {
             isRunning = startResult == .started
             completion(startResult)
@@ -1150,6 +1438,26 @@ private struct FakeMicrophoneCatalog: MicrophoneCataloging {
     }
 }
 
+private struct FakeAppAudioSourceCatalog: AppAudioSourceCataloging {
+    let sources: [AppAudioSource]
+
+    func availableAppAudioSources() -> [AppAudioSource] {
+        sources
+    }
+}
+
+private final class MutableFakeAppAudioSourceCatalog: AppAudioSourceCataloging {
+    var sources: [AppAudioSource]
+
+    init(sources: [AppAudioSource]) {
+        self.sources = sources
+    }
+
+    func availableAppAudioSources() -> [AppAudioSource] {
+        sources
+    }
+}
+
 private final class MutableFakeMicrophoneCatalog: MicrophoneCataloging {
     var devices: [MicrophoneDevice]
 
@@ -1165,6 +1473,11 @@ private final class MutableFakeMicrophoneCatalog: MicrophoneCataloging {
 private final class InMemoryMicrophoneSelectionStore: MicrophoneSelectionStoring {
     var selectedMicrophoneID: String?
     var preferredMicrophoneIDs: [String] = []
+}
+
+private final class InMemoryAppAudioSelectionStore: AppAudioSelectionStoring {
+    var captureMode: ProgramAudioCaptureMode = .globalSystemAudio
+    var selectedAppBundleIDs: [String] = []
 }
 
 private final class InMemorySystemAudioAccessStore: SystemAudioAccessStoring {

@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import CoreAudio
 import Foundation
 
@@ -89,6 +90,32 @@ struct AppMicrophoneCatalog: MicrophoneCataloging {
     }
 }
 
+struct AppAudioSourceCatalog: AppAudioSourceCataloging {
+    func availableAppAudioSources() -> [AppAudioSource] {
+        let currentBundleID = Bundle.main.bundleIdentifier
+        var seenBundleIDs: Set<String> = []
+        return NSWorkspace.shared.runningApplications
+            .compactMap { app -> AppAudioSource? in
+                guard let bundleID = app.bundleIdentifier,
+                      !bundleID.isEmpty,
+                      bundleID != currentBundleID,
+                      app.activationPolicy == .regular || app.activationPolicy == .accessory
+                else {
+                    return nil
+                }
+                guard !seenBundleIDs.contains(bundleID) else {
+                    return nil
+                }
+                seenBundleIDs.insert(bundleID)
+                let name = app.localizedName ?? bundleID
+                return AppAudioSource(bundleID: bundleID, name: name)
+            }
+            .sorted { lhs, rhs in
+                lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+    }
+}
+
 final class AppMicrophoneSelectionStore: MicrophoneSelectionStoring {
     private let defaults: UserDefaults
     private let key = "selectedMicrophoneID"
@@ -117,6 +144,45 @@ final class AppMicrophoneSelectionStore: MicrophoneSelectionStoring {
         }
         set {
             defaults.set(newValue, forKey: priorityKey)
+        }
+    }
+}
+
+final class AppAudioSelectionStore: AppAudioSelectionStoring {
+    private let defaults: UserDefaults
+    private let captureModeKey = "programAudioCaptureMode"
+    private let selectedAppBundleIDsKey = "selectedAppBundleIDs"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    var captureMode: ProgramAudioCaptureMode {
+        get {
+            guard let rawValue = defaults.string(forKey: captureModeKey),
+                  let mode = ProgramAudioCaptureMode(rawValue: rawValue)
+            else {
+                return .globalSystemAudio
+            }
+            return mode
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: captureModeKey)
+        }
+    }
+
+    var selectedAppBundleIDs: [String] {
+        get {
+            defaults.stringArray(forKey: selectedAppBundleIDsKey) ?? []
+        }
+        set {
+            let sanitized = newValue.reduce(into: [String]()) { result, bundleID in
+                guard !bundleID.isEmpty, !result.contains(bundleID) else {
+                    return
+                }
+                result.append(bundleID)
+            }
+            defaults.set(sanitized, forKey: selectedAppBundleIDsKey)
         }
     }
 }

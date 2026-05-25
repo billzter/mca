@@ -1,7 +1,11 @@
 import Foundation
 
 @_silgen_name("MCA_LiveMixerStart")
-private func MCA_LiveMixerStart(_ microphoneID: UnsafePointer<CChar>?) -> Int32
+private func MCA_LiveMixerStart(
+    _ microphoneID: UnsafePointer<CChar>?,
+    _ captureMode: Int32,
+    _ selectedAppBundleIDs: UnsafePointer<CChar>?
+) -> Int32
 
 @_silgen_name("MCA_LiveMixerStop")
 private func MCA_LiveMixerStop()
@@ -11,6 +15,9 @@ private func MCA_LiveMixerCopyHealthCounters(
     _ outCounters: UnsafeMutablePointer<UInt64>,
     _ counterCount: UInt32
 ) -> Int32
+
+@_silgen_name("MCA_LiveMixerSupportsSelectedAppProcessRestore")
+private func MCA_LiveMixerSupportsSelectedAppProcessRestore() -> Int32
 
 private enum MCALiveMixerHealthCounter {
     static let framesMixed = 0
@@ -47,19 +54,35 @@ private enum MCALiveMixerHealthCounter {
 final class AppLiveMixerController: LiveMixerControlling {
     private let controlQueue = DispatchQueue(label: "com.minamiktr.mca.live-mixer-control")
 
+    var supportsSelectedAppProcessRestore: Bool {
+        MCA_LiveMixerSupportsSelectedAppProcessRestore() != 0
+    }
+
     @MainActor func start(
-        microphoneID: String?,
+        configuration: LiveMixerStartConfiguration,
         completion: @MainActor @escaping (LiveMixerStartResult) -> Void
     ) {
-        let requestedMicrophoneID = microphoneID
+        let requestedConfiguration = configuration
         controlQueue.async {
+            let captureMode = requestedConfiguration.captureMode == .selectedApps ? Int32(1) : Int32(0)
+            let selectedBundleIDs = requestedConfiguration.selectedAppBundleIDs.joined(separator: "\n")
+
+            let callNative: (UnsafePointer<CChar>?) -> Int32 = { microphonePointer in
+                if selectedBundleIDs.isEmpty {
+                    return MCA_LiveMixerStart(microphonePointer, captureMode, nil)
+                }
+                return selectedBundleIDs.withCString { bundlePointer in
+                    MCA_LiveMixerStart(microphonePointer, captureMode, bundlePointer)
+                }
+            }
+
             let status: Int32
-            if let requestedMicrophoneID {
+            if let requestedMicrophoneID = requestedConfiguration.microphoneID {
                 status = requestedMicrophoneID.withCString { pointer in
-                    MCA_LiveMixerStart(pointer)
+                    callNative(pointer)
                 }
             } else {
-                status = MCA_LiveMixerStart(nil)
+                status = callNative(nil)
             }
             DispatchQueue.main.async {
                 completion(status == 0 ? .started : .failed)

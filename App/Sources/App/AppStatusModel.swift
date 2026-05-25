@@ -9,6 +9,8 @@ final class AppStatusModel: ObservableObject {
     private let liveMixerController: LiveMixerControlling
     private let microphoneCatalog: MicrophoneCataloging
     private let microphoneSelectionStore: MicrophoneSelectionStoring
+    private let appAudioSourceCatalog: AppAudioSourceCataloging
+    private let appAudioSelectionStore: AppAudioSelectionStoring
     private let systemAudioAccessStore: SystemAudioAccessStoring
     private let launchAtStartupController: LaunchAtStartupControlling
 
@@ -29,14 +31,19 @@ final class AppStatusModel: ObservableObject {
     @Published var preferredMicrophoneIDs: [String] = []
     @Published var microphonePriorityItems: [MicrophonePriorityItem] = []
     @Published var microphoneFault: MicrophoneFault = .none
+    @Published var captureMode: ProgramAudioCaptureMode = .globalSystemAudio
+    @Published var appAudioSourceItems: [AppAudioSourceItem] = []
+    @Published var selectedAppAudioSourceItems: [AppAudioSourceItem] = []
+    @Published var selectedAppBundleIDs: [String] = []
     @Published var lastHealthSnapshot: HealthSnapshot = .empty
     @Published var launchAtStartupStatus: LaunchAtStartupStatus = .unknown
     @Published var launchAtStartupErrorMessage: String?
-    private var runningMicrophoneID: String?
-    private var pendingMicrophoneID: String?
+    private var runningMixerConfiguration: LiveMixerStartConfiguration?
+    private var pendingMixerConfiguration: LiveMixerStartConfiguration?
     private var mixerCommandGeneration: UInt64 = 0
     private var lastKnownSelectedMicrophoneName: String?
     private var knownMicrophoneNames: [String: String] = [:]
+    private var knownAppAudioSourceNames: [String: String] = [:]
 
     init(
         prerequisiteChecker: PrerequisiteChecking,
@@ -45,6 +52,8 @@ final class AppStatusModel: ObservableObject {
         liveMixerController: LiveMixerControlling = NullLiveMixerController(),
         microphoneCatalog: MicrophoneCataloging = EmptyMicrophoneCatalog(),
         microphoneSelectionStore: MicrophoneSelectionStoring = VolatileMicrophoneSelectionStore(),
+        appAudioSourceCatalog: AppAudioSourceCataloging = EmptyAppAudioSourceCatalog(),
+        appAudioSelectionStore: AppAudioSelectionStoring = VolatileAppAudioSelectionStore(),
         systemAudioAccessStore: SystemAudioAccessStoring = VolatileSystemAudioAccessStore(),
         launchAtStartupController: LaunchAtStartupControlling = NullLaunchAtStartupController()
     ) {
@@ -54,8 +63,13 @@ final class AppStatusModel: ObservableObject {
         self.liveMixerController = liveMixerController
         self.microphoneCatalog = microphoneCatalog
         self.microphoneSelectionStore = microphoneSelectionStore
+        self.appAudioSourceCatalog = appAudioSourceCatalog
+        self.appAudioSelectionStore = appAudioSelectionStore
         self.systemAudioAccessStore = systemAudioAccessStore
         self.launchAtStartupController = launchAtStartupController
+        captureMode = appAudioSelectionStore.captureMode
+        selectedAppBundleIDs = appAudioSelectionStore.selectedAppBundleIDs
+        refreshAppAudioSources()
         if systemAudioAccessStore.hasVerifiedSystemAudioAccess {
             systemAudioAccess = .proceedUnverified
         }
@@ -249,6 +263,18 @@ final class AppStatusModel: ObservableObject {
         apply(snapshot: prerequisiteChecker.snapshot(), forceMixerRestart: true)
     }
 
+    func recoverAfterApplicationAudioSourceChange() {
+        let previousSignature = selectedAppAvailabilitySignature
+        refreshAppAudioSources()
+        sessionState = resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup)
+        let selectedAppAvailabilityChanged = previousSignature != selectedAppAvailabilitySignature
+        if captureMode == .selectedApps &&
+            selectedAppAvailabilityChanged &&
+            !liveMixerController.supportsSelectedAppProcessRestore {
+            reconcileLiveMixer(forceRestart: true)
+        }
+    }
+
     func selectMicrophone(id: String) {
         guard availableMicrophones.contains(where: { $0.id == id }) else {
             return
@@ -258,6 +284,32 @@ final class AppStatusModel: ObservableObject {
             fallbackName: selectedMicrophoneName,
             microphonePermission: microphonePermission
         )
+        reconcileLiveMixer()
+    }
+
+    func selectCaptureMode(_ mode: ProgramAudioCaptureMode) {
+        guard captureMode != mode else {
+            return
+        }
+        captureMode = mode
+        appAudioSelectionStore.captureMode = mode
+        refreshAppAudioSources()
+        reconcileLiveMixer()
+    }
+
+    func toggleAppAudioSource(bundleID: String) {
+        guard appAudioSourceItems.contains(where: { $0.bundleID == bundleID }) else {
+            return
+        }
+        var selected = selectedAppBundleIDs
+        if let index = selected.firstIndex(of: bundleID) {
+            selected.remove(at: index)
+        } else {
+            selected.append(bundleID)
+        }
+        appAudioSelectionStore.selectedAppBundleIDs = selected
+        selectedAppBundleIDs = appAudioSelectionStore.selectedAppBundleIDs
+        refreshAppAudioSources()
         reconcileLiveMixer()
     }
 
@@ -366,8 +418,8 @@ final class AppStatusModel: ObservableObject {
         let shouldStop = liveMixerState == .running || liveMixerState == .starting || liveMixerState == .failed
         mixerCommandGeneration += 1
         let generation = mixerCommandGeneration
-        pendingMicrophoneID = nil
-        runningMicrophoneID = nil
+        pendingMixerConfiguration = nil
+        runningMixerConfiguration = nil
         activeMicrophoneID = nil
         activeMicrophoneName = nil
 
@@ -439,6 +491,9 @@ final class AppStatusModel: ObservableObject {
         selectedMicStatus = snapshot.selectedMicStatus
         quickTimeDeviceStatus = snapshot.quickTimeDeviceStatus
         virtualAudioDeviceName = snapshot.virtualAudioDeviceName
+        captureMode = appAudioSelectionStore.captureMode
+        selectedAppBundleIDs = appAudioSelectionStore.selectedAppBundleIDs
+        refreshAppAudioSources()
         refreshAvailableMicrophones(
             fallbackName: snapshot.selectedMicrophoneName,
             microphonePermission: snapshot.microphonePermission
@@ -449,13 +504,23 @@ final class AppStatusModel: ObservableObject {
     }
 
     private func resolvedSessionState(snapshot: PrerequisiteSnapshot) -> CaptureSessionState {
+        resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup(snapshot: snapshot))
+    }
+
+    private func resolvedSessionState(durableSetupComplete: Bool) -> CaptureSessionState {
+        if appAudioSelectionBlocksMixer {
+            return .stopped
+        }
         switch microphoneFault {
         case .usingFallback:
-            return hasCompletedDurableSetup(snapshot: snapshot) && hasCompletedSystemAudioSetup ? .degraded : .stopped
+            return durableSetupComplete ? .degraded : .stopped
         case .selectedUnavailable, .permissionRevoked:
             return .failed
         case .none:
-            return hasCompletedDurableSetup(snapshot: snapshot) && hasCompletedSystemAudioSetup ? .ready : .stopped
+            if durableSetupComplete && hasUnavailableSelectedAppSelection {
+                return .degraded
+            }
+            return durableSetupComplete ? .ready : .stopped
         }
     }
 
@@ -475,12 +540,8 @@ final class AppStatusModel: ObservableObject {
 
     private var hasCompletedOperationalSetup: Bool {
         hasCompletedDurableSetup &&
-            hasCompletedSystemAudioSetup &&
-            !microphoneFaultBlocksMixer
-    }
-
-    private var hasCompletedSystemAudioSetup: Bool {
-        systemAudioAccess == .receivingAudio || systemAudioAccess == .proceedUnverified
+            !microphoneFaultBlocksMixer &&
+            !appAudioSelectionBlocksMixer
     }
 
     private var microphoneFaultBlocksMixer: Bool {
@@ -490,6 +551,55 @@ final class AppStatusModel: ObservableObject {
         case .none, .usingFallback, .selectedUnavailable:
             false
         }
+    }
+
+    private var appAudioSelectionBlocksMixer: Bool {
+        captureMode == .selectedApps && selectedAppBundleIDs.isEmpty
+    }
+
+    private var hasUnavailableSelectedAppSelection: Bool {
+        captureMode == .selectedApps && selectedAppAudioSourceItems.contains { !$0.isAvailable }
+    }
+
+    private var selectedAppAvailabilitySignature: [String: Bool] {
+        Dictionary(uniqueKeysWithValues: selectedAppAudioSourceItems.map { ($0.bundleID, $0.isAvailable) })
+    }
+
+    private func refreshAppAudioSources() {
+        let availableSources = appAudioSourceCatalog.availableAppAudioSources()
+        for source in availableSources {
+            knownAppAudioSourceNames[source.bundleID] = source.name
+        }
+
+        selectedAppBundleIDs = sanitizedAppBundleIDs(appAudioSelectionStore.selectedAppBundleIDs)
+        if selectedAppBundleIDs != appAudioSelectionStore.selectedAppBundleIDs {
+            appAudioSelectionStore.selectedAppBundleIDs = selectedAppBundleIDs
+        }
+
+        let availableByBundleID = Dictionary(uniqueKeysWithValues: availableSources.map { ($0.bundleID, $0) })
+        var orderedBundleIDs = availableSources.map(\.bundleID)
+        for bundleID in selectedAppBundleIDs where !orderedBundleIDs.contains(bundleID) {
+            orderedBundleIDs.append(bundleID)
+        }
+
+        appAudioSourceItems = orderedBundleIDs.map { bundleID in
+            let source = availableByBundleID[bundleID]
+            return AppAudioSourceItem(
+                bundleID: bundleID,
+                name: source?.name ?? knownAppAudioSourceNames[bundleID] ?? bundleID,
+                isAvailable: source != nil,
+                isSelected: selectedAppBundleIDs.contains(bundleID)
+            )
+        }
+        selectedAppAudioSourceItems = appAudioSourceItems.filter(\.isSelected)
+    }
+
+    private func sanitizedAppBundleIDs(_ bundleIDs: [String]) -> [String] {
+        var result: [String] = []
+        for bundleID in bundleIDs where !bundleID.isEmpty && !result.contains(bundleID) {
+            result.append(bundleID)
+        }
+        return result
     }
 
     private func refreshAvailableMicrophones(fallbackName: String?, microphonePermission: PermissionStatus) {
@@ -627,10 +737,11 @@ final class AppStatusModel: ObservableObject {
             return
         }
 
-        if !forceRestart && liveMixerState == .running && runningMicrophoneID == activeMixerMicrophoneID {
+        let configuration = activeMixerConfiguration
+        if !forceRestart && liveMixerState == .running && runningMixerConfiguration == configuration {
             return
         }
-        if !forceRestart && liveMixerState == .starting && pendingMicrophoneID == activeMixerMicrophoneID {
+        if !forceRestart && liveMixerState == .starting && pendingMixerConfiguration == configuration {
             return
         }
 
@@ -643,16 +754,16 @@ final class AppStatusModel: ObservableObject {
             return
         }
 
-        let requestedMicrophoneID = activeMixerMicrophoneID
+        let configuration = activeMixerConfiguration
         mixerCommandGeneration += 1
         let generation = mixerCommandGeneration
-        pendingMicrophoneID = requestedMicrophoneID
+        pendingMixerConfiguration = configuration
         liveMixerState = .starting
 
-        liveMixerController.start(microphoneID: requestedMicrophoneID) { [weak self] result in
+        liveMixerController.start(configuration: configuration) { [weak self] result in
             self?.completeLiveMixerStart(
                 generation: generation,
-                microphoneID: requestedMicrophoneID,
+                configuration: configuration,
                 result: result
             )
         }
@@ -660,21 +771,22 @@ final class AppStatusModel: ObservableObject {
 
     private func completeLiveMixerStart(
         generation: UInt64,
-        microphoneID: String?,
+        configuration: LiveMixerStartConfiguration,
         result: LiveMixerStartResult
     ) {
         guard generation == mixerCommandGeneration else {
             return
         }
-        pendingMicrophoneID = nil
+        pendingMixerConfiguration = nil
         switch result {
         case .started:
-            runningMicrophoneID = microphoneID
+            runningMixerConfiguration = configuration
             liveMixerState = .running
         case .failed:
-            runningMicrophoneID = nil
+            runningMixerConfiguration = nil
             liveMixerState = .failed
             sessionState = .failed
+            systemAudioAccess = .failed
         }
     }
 
@@ -682,9 +794,17 @@ final class AppStatusModel: ObservableObject {
         guard generation == mixerCommandGeneration else {
             return
         }
-        pendingMicrophoneID = nil
-        runningMicrophoneID = nil
+        pendingMixerConfiguration = nil
+        runningMixerConfiguration = nil
         liveMixerState = .stopped
+    }
+
+    private var activeMixerConfiguration: LiveMixerStartConfiguration {
+        LiveMixerStartConfiguration(
+            microphoneID: activeMixerMicrophoneID,
+            captureMode: captureMode,
+            selectedAppBundleIDs: captureMode == .selectedApps ? selectedAppBundleIDs : []
+        )
     }
 
     private var activeMixerMicrophoneID: String? {
@@ -698,7 +818,15 @@ final class AppStatusModel: ObservableObject {
 }
 
 private final class NullLiveMixerController: LiveMixerControlling {
-    @MainActor func start(microphoneID: String?, completion: @MainActor @escaping (LiveMixerStartResult) -> Void) {
+    var supportsSelectedAppProcessRestore: Bool {
+        false
+    }
+
+    @MainActor func start(
+        configuration: LiveMixerStartConfiguration,
+        completion: @MainActor @escaping (LiveMixerStartResult) -> Void
+    ) {
+        _ = configuration
         completion(.started)
     }
 
@@ -717,9 +845,20 @@ private struct EmptyMicrophoneCatalog: MicrophoneCataloging {
     }
 }
 
+private struct EmptyAppAudioSourceCatalog: AppAudioSourceCataloging {
+    func availableAppAudioSources() -> [AppAudioSource] {
+        []
+    }
+}
+
 private final class VolatileMicrophoneSelectionStore: MicrophoneSelectionStoring {
     var selectedMicrophoneID: String?
     var preferredMicrophoneIDs: [String] = []
+}
+
+private final class VolatileAppAudioSelectionStore: AppAudioSelectionStoring {
+    var captureMode: ProgramAudioCaptureMode = .globalSystemAudio
+    var selectedAppBundleIDs: [String] = []
 }
 
 private final class VolatileSystemAudioAccessStore: SystemAudioAccessStoring {
