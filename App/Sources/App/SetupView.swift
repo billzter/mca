@@ -82,6 +82,7 @@ struct SetupView: View {
             MicrophoneAccessPanel(model: model)
             MicrophoneFaultPanel(model: model)
             MicrophonePriorityPanel(model: model)
+            AppAudioSelectionPanel(model: model)
             SystemAudioAccessPanel(model: model)
 
             Button {
@@ -149,6 +150,192 @@ private struct StatusBadge: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background((isComplete ? Color.green.opacity(0.10) : Color.primary.opacity(0.04)), in: Capsule())
+    }
+}
+
+private struct AppAudioSelectionPanel: View {
+    @ObservedObject var model: AppStatusModel
+    @State private var isShowingAppPicker = false
+    @State private var appSearchText = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Program Audio")
+                        .font(.headline)
+                    Text(selectionMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Picker("Program Audio", selection: Binding(
+                    get: { model.captureMode },
+                    set: { model.selectCaptureMode($0) }
+                )) {
+                    Text("All Apps").tag(ProgramAudioCaptureMode.globalSystemAudio)
+                    Text("Selected Apps").tag(ProgramAudioCaptureMode.selectedApps)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+            }
+
+            if model.captureMode == .selectedApps {
+                selectedAppsArea
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.38), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var selectionMessage: String {
+        switch model.captureMode {
+        case .globalSystemAudio:
+            "Capturing system-wide app audio."
+        case .selectedApps:
+            model.selectedAppBundleIDs.isEmpty ? "Choose at least one app." : "Capturing selected app audio."
+        }
+    }
+
+    private var selectedAppsArea: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 6) {
+                if model.selectedAppAudioSourceItems.isEmpty {
+                    Text("No apps selected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
+                } else {
+                    ForEach(model.selectedAppAudioSourceItems) { item in
+                        AppAudioSourceRow(
+                            item: item,
+                            iconName: "minus.circle",
+                            helpText: "Remove app audio",
+                            toggle: {
+                                model.toggleAppAudioSource(bundleID: item.bundleID)
+                            }
+                        )
+                    }
+                }
+            }
+            .frame(width: SetupLayout.actionColumnWidth, alignment: .leading)
+
+            Button {
+                appSearchText = ""
+                isShowingAppPicker = true
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.bordered)
+            .help("Add app audio")
+            .popover(isPresented: $isShowingAppPicker, arrowEdge: .trailing) {
+                AppAudioPickerPopover(
+                    items: model.appAudioSourceItems,
+                    searchText: $appSearchText,
+                    toggle: { bundleID in
+                        model.toggleAppAudioSource(bundleID: bundleID)
+                    }
+                )
+            }
+        }
+    }
+}
+
+private struct AppAudioSourceRow: View {
+    let item: AppAudioSourceItem
+    let iconName: String
+    let helpText: String
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: toggle) {
+                Image(systemName: iconName)
+                    .imageScale(.medium)
+                    .foregroundStyle(iconColor)
+            }
+            .buttonStyle(.plain)
+            .help(helpText)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(item.isAvailable ? item.bundleID : "\(item.bundleID) unavailable")
+                    .font(.caption2)
+                    .foregroundStyle(bundleTextColor)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color.primary.opacity(item.isSelected ? 0.06 : 0.035), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var iconColor: Color {
+        if iconName == "checkmark.circle.fill" {
+            return .green
+        }
+        if iconName == "minus.circle" {
+            return .secondary
+        }
+        return .accentColor
+    }
+
+    private var bundleTextColor: Color {
+        item.isAvailable ? .secondary : .orange
+    }
+}
+
+private struct AppAudioPickerPopover: View {
+    let items: [AppAudioSourceItem]
+    @Binding var searchText: String
+    let toggle: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Search apps", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(filteredItems) { item in
+                        AppAudioSourceRow(
+                            item: item,
+                            iconName: item.isSelected ? "checkmark.circle.fill" : "plus.circle",
+                            helpText: item.isSelected ? "Remove app audio" : "Add app audio",
+                            toggle: {
+                                toggle(item.bundleID)
+                            }
+                        )
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .frame(width: 360, height: 280)
+        }
+        .padding(12)
+        .frame(width: 384)
+    }
+
+    private var filteredItems: [AppAudioSourceItem] {
+        let trimmedSearch = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSearch.isEmpty else {
+            return items
+        }
+        return items.filter { item in
+            item.name.localizedCaseInsensitiveContains(trimmedSearch) ||
+                item.bundleID.localizedCaseInsensitiveContains(trimmedSearch)
+        }
     }
 }
 

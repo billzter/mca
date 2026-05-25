@@ -28,6 +28,40 @@ protocol MicrophoneCataloging {
     func availableMicrophones() -> [MicrophoneDevice]
 }
 
+enum ProgramAudioCaptureMode: String, CaseIterable {
+    case globalSystemAudio = "GlobalSystemAudio"
+    case selectedApps = "SelectedApps"
+}
+
+struct AppAudioSource: Equatable, Identifiable {
+    let bundleID: String
+    let name: String
+
+    var id: String {
+        bundleID
+    }
+}
+
+struct AppAudioSourceItem: Equatable, Identifiable {
+    let bundleID: String
+    let name: String
+    let isAvailable: Bool
+    let isSelected: Bool
+
+    var id: String {
+        bundleID
+    }
+}
+
+protocol AppAudioSourceCataloging {
+    func availableAppAudioSources() -> [AppAudioSource]
+}
+
+protocol AppAudioSelectionStoring: AnyObject {
+    var captureMode: ProgramAudioCaptureMode { get set }
+    var selectedAppBundleIDs: [String] { get set }
+}
+
 protocol MicrophoneSelectionStoring: AnyObject {
     var selectedMicrophoneID: String? { get set }
     var preferredMicrophoneIDs: [String] { get set }
@@ -60,8 +94,19 @@ enum LiveMixerStartResult: Equatable {
     case failed
 }
 
+struct LiveMixerStartConfiguration: Equatable {
+    var microphoneID: String?
+    var captureMode: ProgramAudioCaptureMode
+    var selectedAppBundleIDs: [String]
+}
+
 protocol LiveMixerControlling: AnyObject {
-    @MainActor func start(microphoneID: String?, completion: @MainActor @escaping (LiveMixerStartResult) -> Void)
+    var supportsSelectedAppProcessRestore: Bool { get }
+
+    @MainActor func start(
+        configuration: LiveMixerStartConfiguration,
+        completion: @MainActor @escaping (LiveMixerStartResult) -> Void
+    )
     @MainActor func stop(completion: @MainActor @escaping () -> Void)
     @MainActor func currentHealthSnapshot() -> HealthSnapshot?
 }

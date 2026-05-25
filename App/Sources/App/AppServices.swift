@@ -18,6 +18,9 @@ final class AppServices: ObservableObject {
         onRecoverSettled: { [weak self] in
             self?.model.recoverAfterDeviceConfigurationChange()
         },
+        onApplicationAudioSourceChange: { [weak self] in
+            self?.model.recoverAfterApplicationAudioSourceChange()
+        },
         onSleep: { [weak self] in
             self?.model.stopLiveMixer()
         }
@@ -37,6 +40,8 @@ final class AppServices: ObservableObject {
             liveMixerController: AppLiveMixerController(),
             microphoneCatalog: AppMicrophoneCatalog(),
             microphoneSelectionStore: AppMicrophoneSelectionStore(),
+            appAudioSourceCatalog: AppAudioSourceCatalog(),
+            appAudioSelectionStore: AppAudioSelectionStore(),
             systemAudioAccessStore: AppSystemAudioAccessStore(),
             launchAtStartupController: AppLaunchAtStartupController()
         )
@@ -71,6 +76,7 @@ final class AppServices: ObservableObject {
 private final class DeviceChangeObserver {
     private let onDeviceChange: () -> Void
     private let onRecoverSettled: () -> Void
+    private let onApplicationAudioSourceChange: () -> Void
     private let onSleep: () -> Void
     private var notificationObservers: [NSObjectProtocol] = []
     private var isStarted = false
@@ -93,14 +99,22 @@ private final class DeviceChangeObserver {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
+    private let processObjectListAddress =
+        AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
 
     init(
         onDeviceChange: @escaping () -> Void,
         onRecoverSettled: @escaping () -> Void,
+        onApplicationAudioSourceChange: @escaping () -> Void,
         onSleep: @escaping () -> Void
     ) {
         self.onDeviceChange = onDeviceChange
         self.onRecoverSettled = onRecoverSettled
+        self.onApplicationAudioSourceChange = onApplicationAudioSourceChange
         self.onSleep = onSleep
     }
 
@@ -113,6 +127,7 @@ private final class DeviceChangeObserver {
         observeCoreAudioDeviceList()
         observeSleepWakeNotifications()
         observeApplicationActivation()
+        observeApplicationAudioSourceNotifications()
     }
 
     private func observeCaptureDeviceNotifications() {
@@ -150,6 +165,9 @@ private final class DeviceChangeObserver {
         })
         observeCoreAudioAddress(defaultSystemOutputAddress, handler: { [weak self] in
             self?.recoverSoon()
+        })
+        observeCoreAudioAddress(processObjectListAddress, handler: { [weak self] in
+            self?.applicationAudioSourceChangeSoon()
         })
     }
 
@@ -209,6 +227,32 @@ private final class DeviceChangeObserver {
         )
     }
 
+    private func observeApplicationAudioSourceNotifications() {
+        let center = NSWorkspace.shared.notificationCenter
+        notificationObservers.append(
+            center.addObserver(
+                forName: NSWorkspace.didLaunchApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor [weak self] in
+                    self?.applicationAudioSourceChangeSoon()
+                }
+            }
+        )
+        notificationObservers.append(
+            center.addObserver(
+                forName: NSWorkspace.didTerminateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor [weak self] in
+                    self?.applicationAudioSourceChangeSoon()
+                }
+            }
+        )
+    }
+
     private func refreshSoon() {
         onDeviceChange()
         Task { @MainActor in
@@ -222,6 +266,14 @@ private final class DeviceChangeObserver {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             onRecoverSettled()
+        }
+    }
+
+    private func applicationAudioSourceChangeSoon() {
+        onApplicationAudioSourceChange()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            onApplicationAudioSourceChange()
         }
     }
 }
