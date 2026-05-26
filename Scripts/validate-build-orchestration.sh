@@ -12,7 +12,8 @@ fail() {
 sh -n Scripts/mca-build \
   Scripts/build-app.sh \
   Scripts/build-hal-driver.sh \
-  Scripts/package-installer.sh
+  Scripts/package-installer.sh \
+  Scripts/resolve-release-tag.sh
 
 TEST_VERSION="9.8.7"
 TEST_BUILD="987"
@@ -34,6 +35,42 @@ GITHUB_REF_TYPE=tag GITHUB_REF_NAME="v$TAG_TEST_VERSION" MCA_BUILD_NUMBER="$TAG_
   Scripts/mca-build version >/tmp/mca-build-tag-version.txt
 grep -q "^MCA_VERSION=$TAG_TEST_VERSION$" /tmp/mca-build-tag-version.txt ||
   fail "version command did not derive version from GitHub tag"
+
+rm -f /tmp/mca-release-tag-from-ref.txt
+GITHUB_OUTPUT=/tmp/mca-release-tag-from-ref.txt \
+  GITHUB_REF_TYPE=tag \
+  GITHUB_REF_NAME="v$TAG_TEST_VERSION" \
+  Scripts/resolve-release-tag.sh
+grep -q "^release_tag=v$TAG_TEST_VERSION$" /tmp/mca-release-tag-from-ref.txt ||
+  fail "release tag resolver did not use GitHub tag refs"
+
+rm -f /tmp/mca-release-tag-from-input.txt
+GITHUB_OUTPUT=/tmp/mca-release-tag-from-input.txt \
+  GITHUB_REF_TYPE=branch \
+  INPUT_RELEASE_TAG="v$TEST_VERSION" \
+  Scripts/resolve-release-tag.sh
+grep -q "^release_tag=v$TEST_VERSION$" /tmp/mca-release-tag-from-input.txt ||
+  fail "release tag resolver did not use manual dispatch input"
+
+if GITHUB_OUTPUT=/tmp/mca-release-tag-missing-output.txt \
+  GITHUB_REF_TYPE=branch \
+  INPUT_RELEASE_TAG="" \
+  Scripts/resolve-release-tag.sh >/tmp/mca-release-tag-missing.txt 2>&1; then
+  fail "release tag resolver accepted missing manual dispatch input"
+fi
+grep -q "missing release tag" /tmp/mca-release-tag-missing.txt ||
+  fail "release tag resolver did not report missing manual dispatch input"
+
+if GITHUB_OUTPUT=/tmp/mca-release-tag-injection-output.txt \
+  GITHUB_REF_TYPE=branch \
+  INPUT_RELEASE_TAG='v1.2.3"; touch /tmp/mca-release-tag-injected #' \
+  Scripts/resolve-release-tag.sh >/tmp/mca-release-tag-injection.txt 2>&1; then
+  fail "release tag resolver accepted shell metacharacters"
+fi
+grep -q "invalid release tag" /tmp/mca-release-tag-injection.txt ||
+  fail "release tag resolver did not reject shell metacharacters"
+test ! -e /tmp/mca-release-tag-injected ||
+  fail "release tag resolver allowed shell injection side effect"
 
 Scripts/mca-build package --version "$TEST_VERSION" --build "$TEST_BUILD" >/tmp/mca-orchestrated-package.log
 

@@ -78,7 +78,6 @@ DEFAULT_KEYCHAIN_CHANGED=1
 security import "$APP_P12_PATH" \
   -k "$KEYCHAIN_PATH" \
   -P "$APP_P12_PASSWORD" \
-  -A \
   -T /usr/bin/codesign \
   -T /usr/bin/pkgbuild \
   -T /usr/bin/productbuild >/dev/null
@@ -87,7 +86,6 @@ security import "$APP_CERT_PATH" -k "$KEYCHAIN_PATH" >/dev/null
 security import "$INSTALLER_P12_PATH" \
   -k "$KEYCHAIN_PATH" \
   -P "$INSTALLER_P12_PASSWORD" \
-  -A \
   -T /usr/bin/codesign \
   -T /usr/bin/pkgbuild \
   -T /usr/bin/productbuild >/dev/null

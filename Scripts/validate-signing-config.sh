@@ -28,4 +28,8 @@ fi
 grep -q 'set MCA_APP_P12_PASSWORD or MCA_P12_PASSWORD' /tmp/mca-signing-missing-password.log ||
   fail "signed package wrapper did not fail with the expected password guidance"
 
+if grep -E '^[[:space:]]*-A([[:space:]]|\\$)' Scripts/package-signed-installer.sh >/dev/null; then
+  fail "signed package wrapper grants broad private-key access with security import -A"
+fi
+
 printf 'signing config validation passed\n'

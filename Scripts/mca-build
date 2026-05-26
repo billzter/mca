@@ -117,6 +117,7 @@ case "$COMMAND" in
     Scripts/validate-build-system.sh
     Scripts/validate-packaging.sh
     Scripts/validate-build-orchestration.sh
+    Scripts/validate-release-workflow-security.sh
     Scripts/validate-signing-config.sh
     Scripts/validate-notarization-config.sh
     ;;
