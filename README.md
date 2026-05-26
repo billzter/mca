@@ -2,7 +2,9 @@
 
 MixedCaptureAudio is a native macOS menu-bar helper that publishes a virtual Core Audio input named `Mixed Capture Audio`. Select it in QuickTime Player, Screenshot, or another recorder to capture a live mix of system audio and one microphone.
 
-![MixedCaptureAudio setup window](docs/assets/readme/setup-ready.png)
+<p align="center">
+  <img src="docs/assets/readme/hero-composite.png" alt="MixedCaptureAudio setup and menu-bar status shown on a mocked Mac display" width="900">
+</p>
 
 ## What It Does
 
@@ -12,8 +14,6 @@ MixedCaptureAudio is a native macOS menu-bar helper that publishes a virtual Cor
 - Lets you choose an active microphone and keep a fallback priority list.
 - Keeps capture running from the menu-bar helper instead of exposing session start/stop controls.
 - Shows local setup, permission, device, mixer, and shared-ring health diagnostics.
-
-![MixedCaptureAudio menu-bar status](docs/assets/readme/menu-bar-status.png)
 
 ## How It Works
 
