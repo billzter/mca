@@ -1,12 +1,2 @@
-import SwiftUI
-
-@main
-struct MixedCaptureAudioApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-
-    var body: some Scene {
-        Settings {
-            EmptyView()
-        }
-    }
-}
+// App startup is owned by AppDelegate in AppServices.swift.
+// SwiftUI remains hosted inside explicit AppKit windows and popovers only.

@@ -685,12 +685,12 @@ final class AppStatusModel: ObservableObject {
             knownMicrophoneNames[microphone.id] = microphone.name
         }
 
-        let storedIDs = sanitizedPriorityIDs(microphoneSelectionStore.preferredMicrophoneIDs)
-        if storedIDs != microphoneSelectionStore.preferredMicrophoneIDs {
-            microphoneSelectionStore.preferredMicrophoneIDs = storedIDs
-        }
-
+        let storedIDsBeforeNormalization = microphoneSelectionStore.preferredMicrophoneIDs
+        let storedIDs = sanitizedPriorityIDs(storedIDsBeforeNormalization)
         let normalizedIDs = normalizedPriorityIDs(from: storedIDs)
+        if normalizedIDs != storedIDsBeforeNormalization {
+            microphoneSelectionStore.preferredMicrophoneIDs = normalizedIDs
+        }
         preferredMicrophoneIDs = normalizedIDs
 
         switch microphonePermission {
