@@ -79,4 +79,5 @@ enum SetupWindowReopenPolicy {
 
 enum AppLifecyclePresentation {
     static let exposesSystemSettingsScene = false
+    static let usesExplicitAppKitDelegateMain = true
 }
