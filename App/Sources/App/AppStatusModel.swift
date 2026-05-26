@@ -46,6 +46,8 @@ final class AppStatusModel: ObservableObject {
     private var knownMicrophoneNames: [String: String] = [:]
     private var knownAppAudioSourceNames: [String: String] = [:]
     private var sharedRingStatsAccumulator = SharedRingStatsAccumulator()
+    private var pendingSelectedAppRestoreFallbacks: [String: Int] = [:]
+    private let selectedAppRestoreFallbackRecoveryPasses = 3
 
     init(
         prerequisiteChecker: PrerequisiteChecking,
@@ -271,15 +273,17 @@ final class AppStatusModel: ObservableObject {
         sessionState = resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup)
         let selectedAppAvailabilityChanged = previousSignature != selectedAppAvailabilitySignature
         guard captureMode == .selectedApps else {
+            pendingSelectedAppRestoreFallbacks.removeAll(keepingCapacity: true)
             return
         }
 
-        let selectedChangedAppIsAvailable = selectedAppAudioSourceItems.contains {
-            changedBundleIDs.contains($0.bundleID) && $0.isAvailable
+        if liveMixerController.supportsSelectedAppProcessRestore {
+            rememberSelectedAppRestoreFallbacks(from: changedBundleIDs)
         }
+        let delayedFallbackBundleIDs = consumeAvailableSelectedAppRestoreFallbacks()
         let shouldForceRestart =
             (selectedAppAvailabilityChanged && !liveMixerController.supportsSelectedAppProcessRestore) ||
-            (liveMixerController.supportsSelectedAppProcessRestore && selectedChangedAppIsAvailable)
+            !delayedFallbackBundleIDs.isEmpty
 
         if shouldForceRestart {
             reconcileLiveMixer(forceRestart: true)
@@ -305,6 +309,7 @@ final class AppStatusModel: ObservableObject {
         captureMode = mode
         appAudioSelectionStore.captureMode = mode
         refreshAppAudioSources()
+        pendingSelectedAppRestoreFallbacks.removeAll(keepingCapacity: true)
         sessionState = resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup)
         reconcileLiveMixer()
     }
@@ -322,6 +327,7 @@ final class AppStatusModel: ObservableObject {
         appAudioSelectionStore.selectedAppBundleIDs = selected
         selectedAppBundleIDs = appAudioSelectionStore.selectedAppBundleIDs
         refreshAppAudioSources()
+        pendingSelectedAppRestoreFallbacks.removeAll(keepingCapacity: true)
         sessionState = resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup)
         reconcileLiveMixer()
     }
@@ -594,6 +600,45 @@ final class AppStatusModel: ObservableObject {
 
     private var selectedAppAvailabilitySignature: [String: Bool] {
         Dictionary(uniqueKeysWithValues: selectedAppAudioSourceItems.map { ($0.bundleID, $0.isAvailable) })
+    }
+
+    private func rememberSelectedAppRestoreFallbacks(from bundleIDs: Set<String>) {
+        guard !bundleIDs.isEmpty else {
+            return
+        }
+        for bundleID in bundleIDs where selectedAppBundleIDs.contains(bundleID) {
+            pendingSelectedAppRestoreFallbacks[bundleID] = selectedAppRestoreFallbackRecoveryPasses
+        }
+    }
+
+    private func consumeAvailableSelectedAppRestoreFallbacks() -> Set<String> {
+        guard !pendingSelectedAppRestoreFallbacks.isEmpty else {
+            return []
+        }
+
+        let availableSelectedBundleIDs = Set(
+            selectedAppAudioSourceItems
+                .filter(\.isAvailable)
+                .map(\.bundleID)
+        )
+        let availableFallbacks = Set(
+            pendingSelectedAppRestoreFallbacks.keys.filter { availableSelectedBundleIDs.contains($0) }
+        )
+        if !availableFallbacks.isEmpty {
+            for bundleID in availableFallbacks {
+                pendingSelectedAppRestoreFallbacks.removeValue(forKey: bundleID)
+            }
+            return availableFallbacks
+        }
+
+        for (bundleID, remainingPasses) in pendingSelectedAppRestoreFallbacks {
+            if remainingPasses <= 1 {
+                pendingSelectedAppRestoreFallbacks.removeValue(forKey: bundleID)
+            } else {
+                pendingSelectedAppRestoreFallbacks[bundleID] = remainingPasses - 1
+            }
+        }
+        return []
     }
 
     private func refreshAppAudioSources() {

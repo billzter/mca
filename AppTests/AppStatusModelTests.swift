@@ -29,6 +29,8 @@ struct AppStatusModelTests {
         await testSelectedAppQuitRestartsDegradesAndKeepsSelection()
         await testSelectedAppRelaunchCapturesAgainWithoutReselecting()
         await testSelectedAppProcessRestoreFallsBackOnSelectedAppRelaunch()
+        await testSelectedAppProcessRestoreFallsBackWhenAvailabilityLagsLaunch()
+        await testSelectedAppProcessRestoreDelayedFallbackExpiresWhenAppStaysUnavailable()
         await testSelectedAppProcessRestoreIgnoresUnrelatedAppChurn()
         await testSelectedMicrophoneUnplugUsesTemporaryFallback()
         await testSelectedMicrophoneReturnRestoresSavedSelection()
@@ -750,6 +752,64 @@ struct AppStatusModelTests {
         assertEqual(controller.stopCount, 2)
         assertEqual(appStore.selectedAppBundleIDs, ["com.apple.Music"])
         assertEqual(model.selectedAppAudioSourceItems.map(\.bundleID), ["com.apple.Music"])
+        assertEqual(model.selectedAppAudioSourceItems.map(\.isAvailable), [true])
+        assertEqual(model.sessionState, .ready)
+    }
+
+    private static func testSelectedAppProcessRestoreFallsBackWhenAvailabilityLagsLaunch() async {
+        let controller = FakeLiveMixerController()
+        controller.supportsSelectedAppProcessRestore = true
+        let catalog = MutableFakeAppAudioSourceCatalog(sources: [])
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: catalog,
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        model.recoverAfterApplicationAudioSourceChange(changedBundleIDs: ["com.apple.Music"])
+        catalog.sources = [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
+        model.recoverAfterApplicationAudioSourceChange()
+
+        assertEqual(controller.startCount, 2)
+        assertEqual(controller.stopCount, 1)
+        assertEqual(model.selectedAppAudioSourceItems.map(\.isAvailable), [true])
+        assertEqual(model.sessionState, .ready)
+    }
+
+    private static func testSelectedAppProcessRestoreDelayedFallbackExpiresWhenAppStaysUnavailable() async {
+        let controller = FakeLiveMixerController()
+        controller.supportsSelectedAppProcessRestore = true
+        let catalog = MutableFakeAppAudioSourceCatalog(sources: [])
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: catalog,
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        model.recoverAfterApplicationAudioSourceChange(changedBundleIDs: ["com.apple.Music"])
+        model.recoverAfterApplicationAudioSourceChange()
+        model.recoverAfterApplicationAudioSourceChange()
+        catalog.sources = [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
+        model.recoverAfterApplicationAudioSourceChange()
+
+        assertEqual(controller.startCount, 1)
+        assertEqual(controller.stopCount, 0)
         assertEqual(model.selectedAppAudioSourceItems.map(\.isAvailable), [true])
         assertEqual(model.sessionState, .ready)
     }
