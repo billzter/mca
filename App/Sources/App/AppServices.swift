@@ -361,7 +361,6 @@ private final class StatusItemController: NSObject {
     }
 }
 
-@main
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in

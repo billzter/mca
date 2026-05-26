@@ -8,6 +8,7 @@ struct SetupPresentationTests {
         testUserFacingStatusLabelsAreFriendly()
         testReopenAfterSetupPresentationSuppressesDefaultWindow()
         testAppLifecycleDoesNotExposeSystemSettingsScene()
+        testAppLifecycleUsesExplicitAppKitDelegateMain()
         print("setup presentation tests passed")
     }
 
@@ -61,6 +62,10 @@ struct SetupPresentationTests {
 
     private static func testAppLifecycleDoesNotExposeSystemSettingsScene() {
         assertFalse(AppLifecyclePresentation.exposesSystemSettingsScene)
+    }
+
+    private static func testAppLifecycleUsesExplicitAppKitDelegateMain() {
+        assertTrue(AppLifecyclePresentation.usesExplicitAppKitDelegateMain)
     }
 }
 

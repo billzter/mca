@@ -1,2 +1,12 @@
-// App startup is owned by AppDelegate in AppServices.swift.
-// SwiftUI remains hosted inside explicit AppKit windows and popovers only.
+import AppKit
+
+@main
+enum MixedCaptureAudioMain {
+    private static let appDelegate = AppDelegate()
+
+    static func main() {
+        let app = NSApplication.shared
+        app.delegate = appDelegate
+        app.run()
+    }
+}
