@@ -35,6 +35,7 @@ swiftc \
   -module-cache-path Build/ModuleCache \
   App/Sources/Diagnostics/HealthDiagnostics.swift \
   App/Sources/App/PrerequisiteStatus.swift \
+  App/Sources/App/AppPrerequisiteChecker.swift \
   App/Sources/App/AppStatusModel.swift \
   AppTests/AppStatusModelTests.swift \
   -o Build/Debug/Tests/AppStatusModelTests

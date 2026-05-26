@@ -40,6 +40,7 @@ struct AppStatusModelTests {
         await testMicrophonePriorityChoosesFirstAvailableDevice()
         await testMicrophonePriorityFallsBackAndRestoresTopPriority()
         await testSelectedMicrophoneCanBeLowerThanTopPriority()
+        await testSelectingLowerPriorityMicrophoneDoesNotReseedMissingStoredPriority()
         await testMovingMicrophonePriorityDoesNotChangeSelectedActiveMic()
         await testSelectedMicrophoneUnavailableFallsBackByPriorityThenRestores()
         await testDroppingMicrophonePriorityBeforeTargetReordersOnce()
@@ -1095,6 +1096,36 @@ struct AppStatusModelTests {
         assertEqual(model.microphonePriorityItems.map(\.isActive), [false, true])
     }
 
+    private static func testSelectingLowerPriorityMicrophoneDoesNotReseedMissingStoredPriority() async {
+        let controller = FakeLiveMixerController()
+        let store = AppMicrophoneSelectionStore(defaults: isolatedDefaults())
+        store.selectedMicrophoneID = "built-in"
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            microphoneCatalog: FakeMicrophoneCatalog(
+                devices: [
+                    MicrophoneDevice(id: "built-in", name: "MacBook Pro Microphone"),
+                    MicrophoneDevice(id: "usb", name: "USB Mic"),
+                ]
+            ),
+            microphoneSelectionStore: store,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        model.selectMicrophone(id: "usb")
+
+        assertEqual(model.preferredMicrophoneIDs, ["built-in", "usb"])
+        assertEqual(store.preferredMicrophoneIDs, ["built-in", "usb"])
+        assertEqual(model.selectedMicrophoneID, "usb")
+        assertEqual(model.activeMicrophoneID, "usb")
+        assertEqual(model.microphonePriorityItems.map(\.isSelected), [false, true])
+        assertEqual(model.microphonePriorityItems.map(\.isActive), [false, true])
+    }
+
     private static func testMovingMicrophonePriorityDoesNotChangeSelectedActiveMic() async {
         let controller = FakeLiveMixerController()
         let store = InMemoryMicrophoneSelectionStore()
@@ -1339,6 +1370,15 @@ struct AppStatusModelTests {
             selectedMicStatus: .available,
             quickTimeDeviceStatus: .visible
         )
+    }
+
+    private static func isolatedDefaults() -> UserDefaults {
+        let suiteName = "com.minamiktr.mca.tests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            fatalError("Could not create isolated defaults")
+        }
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
     }
 
     private static func testLiveHealthRefreshPublishesControllerSnapshot() async {

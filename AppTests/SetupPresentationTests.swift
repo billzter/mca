@@ -7,6 +7,7 @@ struct SetupPresentationTests {
         testIncompleteStatusesRemainIncomplete()
         testUserFacingStatusLabelsAreFriendly()
         testReopenAfterSetupPresentationSuppressesDefaultWindow()
+        testAppLifecycleDoesNotExposeSystemSettingsScene()
         print("setup presentation tests passed")
     }
 
@@ -56,6 +57,10 @@ struct SetupPresentationTests {
 
     private static func testReopenAfterSetupPresentationSuppressesDefaultWindow() {
         assertFalse(SetupWindowReopenPolicy.shouldAllowSystemDefaultWindowCreation)
+    }
+
+    private static func testAppLifecycleDoesNotExposeSystemSettingsScene() {
+        assertFalse(AppLifecyclePresentation.exposesSystemSettingsScene)
     }
 }
 

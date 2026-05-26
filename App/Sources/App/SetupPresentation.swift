@@ -76,3 +76,7 @@ struct SetupStepPresentation {
 enum SetupWindowReopenPolicy {
     static let shouldAllowSystemDefaultWindowCreation = false
 }
+
+enum AppLifecyclePresentation {
+    static let exposesSystemSettingsScene = false
+}
