@@ -265,14 +265,23 @@ final class AppStatusModel: ObservableObject {
         apply(snapshot: prerequisiteChecker.snapshot(), forceMixerRestart: true)
     }
 
-    func recoverAfterApplicationAudioSourceChange() {
+    func recoverAfterApplicationAudioSourceChange(changedBundleIDs: Set<String> = []) {
         let previousSignature = selectedAppAvailabilitySignature
         refreshAppAudioSources()
         sessionState = resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup)
         let selectedAppAvailabilityChanged = previousSignature != selectedAppAvailabilitySignature
-        if captureMode == .selectedApps &&
-            selectedAppAvailabilityChanged &&
-            !liveMixerController.supportsSelectedAppProcessRestore {
+        guard captureMode == .selectedApps else {
+            return
+        }
+
+        let selectedChangedAppIsAvailable = selectedAppAudioSourceItems.contains {
+            changedBundleIDs.contains($0.bundleID) && $0.isAvailable
+        }
+        let shouldForceRestart =
+            (selectedAppAvailabilityChanged && !liveMixerController.supportsSelectedAppProcessRestore) ||
+            (liveMixerController.supportsSelectedAppProcessRestore && selectedChangedAppIsAvailable)
+
+        if shouldForceRestart {
             reconcileLiveMixer(forceRestart: true)
         }
     }

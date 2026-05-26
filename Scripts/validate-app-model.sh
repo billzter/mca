@@ -25,6 +25,14 @@ Build/Debug/Tests/PrerequisiteStatusTests
 
 swiftc \
   -module-cache-path Build/ModuleCache \
+  App/Sources/App/DebouncedMainActorAction.swift \
+  AppTests/DebouncedMainActorActionTests.swift \
+  -o Build/Debug/Tests/DebouncedMainActorActionTests
+
+Build/Debug/Tests/DebouncedMainActorActionTests
+
+swiftc \
+  -module-cache-path Build/ModuleCache \
   App/Sources/Diagnostics/HealthDiagnostics.swift \
   App/Sources/App/PrerequisiteStatus.swift \
   App/Sources/App/AppStatusModel.swift \

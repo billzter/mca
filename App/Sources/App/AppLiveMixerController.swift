@@ -35,7 +35,9 @@ private enum MCALiveMixerHealthCounter {
     static let sharedRingFillErrorFrames = 12
     static let sharedRingFillErrorAbsFrames = 13
     static let sharedRingOverrunFrames = 14
-    static let count = 15
+    static let systemQueueDroppedFrames = 15
+    static let micQueueDroppedFrames = 16
+    static let count = 17
 
     static func healthSnapshot(from counters: [UInt64]) -> HealthSnapshot {
         precondition(counters.count >= count)
@@ -46,6 +48,8 @@ private enum MCALiveMixerHealthCounter {
             clippedSamples: counters[clippedSamples],
             systemQueueFrames: UInt32(clamping: counters[systemQueueFrames]),
             micQueueFrames: UInt32(clamping: counters[micQueueFrames]),
+            systemQueueDroppedFrames: counters[systemQueueDroppedFrames],
+            micQueueDroppedFrames: counters[micQueueDroppedFrames],
             sourceFrameDelta: Int32(clamping: Int64(bitPattern: counters[sourceFrameDelta])),
             sourceFrameDeltaAbs: UInt32(clamping: counters[sourceFrameDeltaAbs]),
             systemDriftDropFrames: counters[systemDriftDropFrames],
@@ -57,6 +61,12 @@ private enum MCALiveMixerHealthCounter {
             sharedRingOverrunFrames: counters[sharedRingOverrunFrames]
         )
     }
+}
+
+private enum MCALiveMixerCaptureMode {
+    // Keep these values in sync with App/Sources/Audio/LiveMixerABI.h.
+    static let globalSystemAudio = Int32(0)
+    static let selectedApps = Int32(1)
 }
 
 final class AppLiveMixerController: LiveMixerControlling {
@@ -73,7 +83,9 @@ final class AppLiveMixerController: LiveMixerControlling {
     ) {
         let requestedConfiguration = configuration
         controlQueue.async {
-            let captureMode = requestedConfiguration.captureMode == .selectedApps ? Int32(1) : Int32(0)
+            let captureMode = requestedConfiguration.captureMode == .selectedApps
+                ? MCALiveMixerCaptureMode.selectedApps
+                : MCALiveMixerCaptureMode.globalSystemAudio
             let selectedBundleIDs = requestedConfiguration.selectedAppBundleIDs.joined(separator: "\n")
 
             let callNative: (UnsafePointer<CChar>?) -> Int32 = { microphonePointer in

@@ -5,6 +5,7 @@ struct HealthDiagnosticsTests {
     static func main() {
         testCleanRunningSessionIsGood()
         testMicUnderrunIsDegradedAndUserVisible()
+        testSourceQueueDropsAreDegradedAndSeparateFromCallbackErrors()
         testCallbackErrorsAreFailedAndUserVisible()
         testClippingIsDegradedButNotFailed()
         testDriftCorrectionIsDiagnosticsOnlyWhenNoAudioWasLost()
@@ -36,6 +37,19 @@ struct HealthDiagnosticsTests {
         assertEqual(summary.severity, .degraded)
         assertContains(summary.userVisibleFindings.map(\.name), "Microphone Underrun")
         assertContains(summary.recommendedActions, "Keep recording if this was brief; check microphone connection if it repeats.")
+    }
+
+    private static func testSourceQueueDropsAreDegradedAndSeparateFromCallbackErrors() {
+        var snapshot = HealthSnapshot.cleanRunning
+        snapshot.systemQueueDroppedFrames = 128
+        snapshot.micQueueDroppedFrames = 64
+
+        let summary = HealthDiagnosticSummary(snapshot: snapshot)
+
+        assertEqual(summary.severity, .degraded)
+        assertContains(summary.userVisibleFindings.map(\.name), "Source Queue Drops")
+        assertContains(summary.recommendedActions, "Keep recording if this was brief; reduce system load if source queue drops repeat.")
+        assertFalse(summary.userVisibleFindings.map(\.name).contains("Audio Callback Error"))
     }
 
     private static func testCallbackErrorsAreFailedAndUserVisible() {
