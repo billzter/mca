@@ -60,6 +60,23 @@ C HAL AudioServerPlugIn
 
 The HAL driver is deliberately small. It does not capture audio, mix sources, prompt for permissions, call Swift, link the Rust engine, own policy, or log from the IO path. Bad, missing, stale, or insufficient data becomes silence.
 
+```mermaid
+flowchart LR
+    User["User / Setup Window"] --> App["Swift/AppKit menu-bar app"]
+    App --> Status["AppStatusModel<br/>preferences, permissions, health"]
+    Status --> Bridge["Objective-C capture bridge<br/>LiveMixerSession.m"]
+    Bridge --> Tap["Core Audio process tap<br/>global or selected apps"]
+    Bridge --> Mic["AudioQueue microphone capture"]
+    Tap --> Queues["Bounded source queues"]
+    Mic --> Queues
+    Queues --> Owner["Mixer owner thread"]
+    Owner --> Rust["Rust mixer/session"]
+    Rust --> SHM["POSIX shared ring<br/>/mca.mix.v1"]
+    HAL["C HAL AudioServerPlugIn<br/>coreaudiod/helper host"] --> SHM
+    HAL --> Recorder["QuickTime / Screenshot<br/>virtual input client"]
+    Status -. health counters .-> User
+```
+
 ## Runtime Data Flow
 
 ```text
@@ -87,6 +104,73 @@ The fixed HAL-facing format is:
 - heartbeat stale threshold: `500 ms`
 
 The shared-memory header and constants live in `HALPlugin/Include/MixedAudioSharedMemory.h`. Rust keeps a mechanically generated mirror in `Rust/mixed-audio-engine/src/generated_shared_memory_abi.rs`. The public Rust C ABI lives in `Rust/mixed-audio-engine/include/MixedAudioEngine.h`.
+
+```mermaid
+sequenceDiagram
+    participant App as Swift/AppKit app
+    participant ObjC as LiveMixerSession.m
+    participant Tap as Core Audio process tap
+    participant Mic as Microphone AudioQueue
+    participant Owner as Mixer owner thread
+    participant Rust as Rust mixer/session
+    participant SHM as /mca.mix.v1 shared ring
+    participant HAL as HAL AudioServerPlugIn
+    participant QT as QuickTime/Screenshot
+
+    App->>ObjC: MCA_LiveMixerStart(mic, captureMode, selectedBundleIDs)
+    ObjC->>Tap: Create global or selected-app process tap
+    ObjC->>Mic: Start selected microphone capture
+    ObjC->>Rust: Create or reuse session/writer
+    Rust->>SHM: Create/write shared-memory ring
+    QT->>HAL: Start recording virtual input
+    HAL->>SHM: Map shared ring
+
+    loop Audio callbacks
+        Tap-->>ObjC: Program audio frames
+        Mic-->>ObjC: Microphone frames
+        ObjC-->>Owner: Push frames into bounded queues
+        Owner->>Rust: Drain queues and mix
+        Rust->>SHM: Write interleaved stereo frames
+        HAL->>SHM: Non-blocking read
+        HAL-->>QT: Input buffers or silence
+    end
+```
+
+## Selected-App Relaunch Recovery
+
+Selected-app mode passes selected bundle IDs across the Swift/Objective-C bridge. On macOS 26 SDK/runtime combinations, `LiveMixerSession.m` also sets Core Audio process-restore hints on the tap description. The app still treats those hints as best effort: if a selected app relaunches, Workspace notifications carry the changed bundle ID into a debounced recovery path, and the model force-restarts the source graph when the selected app is available. If app availability lags the launch notification, the model keeps a short retry budget so a later Core Audio process-list refresh can still trigger the fallback.
+
+This favors recovery over the original seamless macOS 26 restore optimization. A selected-app relaunch may briefly replace the source graph, smoothed by the existing bridge/fade path, instead of relying solely on Core Audio restore to avoid graph replacement.
+
+```mermaid
+sequenceDiagram
+    participant WS as NSWorkspace
+    participant CA as Core Audio process list
+    participant Services as DeviceChangeObserver
+    participant Debounce as DebouncedMainActorAction
+    participant Model as AppStatusModel
+    participant Mixer as AppLiveMixerController
+    participant ObjC as LiveMixerSession.m
+
+    WS-->>Services: selected app launch/terminate(bundleID)
+    CA-->>Services: process-list changed(no bundleID)
+    Services->>Debounce: schedule recovery and remember bundle IDs
+    Debounce-->>Model: recoverAfterApplicationAudioSourceChange(changedBundleIDs)
+    Model->>Model: refresh available app sources
+
+    alt selected bundle is available
+        Model->>Mixer: force restart selected-app capture
+        Mixer->>ObjC: MCA_LiveMixerStart(selectedApps, bundle list)
+        ObjC->>ObjC: recreate tap, bridge/fade transition
+    else selected bundle is not available yet
+        Model->>Model: keep selected bundle in retry budget
+        CA-->>Services: later process-list changed(no bundleID)
+        Services->>Debounce: schedule recovery
+        Debounce-->>Model: recoverAfterApplicationAudioSourceChange([])
+        Model->>Model: refresh; pending selected bundle now available
+        Model->>Mixer: force restart selected-app capture
+    end
+```
 
 ## User-Facing App Behavior
 
