@@ -18,8 +18,8 @@ final class AppServices: ObservableObject {
         onRecoverSettled: { [weak self] in
             self?.model.recoverAfterDeviceConfigurationChange()
         },
-        onApplicationAudioSourceChange: { [weak self] in
-            self?.model.recoverAfterApplicationAudioSourceChange()
+        onApplicationAudioSourceChange: { [weak self] changedBundleIDs in
+            self?.model.recoverAfterApplicationAudioSourceChange(changedBundleIDs: changedBundleIDs)
         },
         onSleep: { [weak self] in
             self?.model.stopLiveMixer()
@@ -76,8 +76,12 @@ final class AppServices: ObservableObject {
 private final class DeviceChangeObserver {
     private let onDeviceChange: () -> Void
     private let onRecoverSettled: () -> Void
-    private let onApplicationAudioSourceChange: () -> Void
+    private let onApplicationAudioSourceChange: (Set<String>) -> Void
     private let onSleep: () -> Void
+    private lazy var applicationAudioSourceChangeDebouncer = DebouncedMainActorAction { [weak self] in
+        self?.flushApplicationAudioSourceChange()
+    }
+    private var pendingApplicationAudioSourceBundleIDs: Set<String> = []
     private var notificationObservers: [NSObjectProtocol] = []
     private var isStarted = false
     private let coreAudioQueue = DispatchQueue(label: "com.minamiktr.mca.device-changes")
@@ -109,7 +113,7 @@ private final class DeviceChangeObserver {
     init(
         onDeviceChange: @escaping () -> Void,
         onRecoverSettled: @escaping () -> Void,
-        onApplicationAudioSourceChange: @escaping () -> Void,
+        onApplicationAudioSourceChange: @escaping (Set<String>) -> Void,
         onSleep: @escaping () -> Void
     ) {
         self.onDeviceChange = onDeviceChange
@@ -167,7 +171,7 @@ private final class DeviceChangeObserver {
             self?.recoverSoon()
         })
         observeCoreAudioAddress(processObjectListAddress, handler: { [weak self] in
-            self?.applicationAudioSourceChangeSoon()
+            self?.applicationAudioSourceChangeSoon(changedBundleID: nil)
         })
     }
 
@@ -234,9 +238,11 @@ private final class DeviceChangeObserver {
                 forName: NSWorkspace.didLaunchApplicationNotification,
                 object: nil,
                 queue: .main
-            ) { _ in
+            ) { notification in
                 Task { @MainActor [weak self] in
-                    self?.applicationAudioSourceChangeSoon()
+                    self?.applicationAudioSourceChangeSoon(
+                        changedBundleID: Self.bundleID(fromWorkspaceNotification: notification)
+                    )
                 }
             }
         )
@@ -245,9 +251,11 @@ private final class DeviceChangeObserver {
                 forName: NSWorkspace.didTerminateApplicationNotification,
                 object: nil,
                 queue: .main
-            ) { _ in
+            ) { notification in
                 Task { @MainActor [weak self] in
-                    self?.applicationAudioSourceChangeSoon()
+                    self?.applicationAudioSourceChangeSoon(
+                        changedBundleID: Self.bundleID(fromWorkspaceNotification: notification)
+                    )
                 }
             }
         )
@@ -269,12 +277,22 @@ private final class DeviceChangeObserver {
         }
     }
 
-    private func applicationAudioSourceChangeSoon() {
-        onApplicationAudioSourceChange()
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            onApplicationAudioSourceChange()
+    private static func bundleID(fromWorkspaceNotification notification: Notification) -> String? {
+        let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        return app?.bundleIdentifier
+    }
+
+    private func applicationAudioSourceChangeSoon(changedBundleID: String?) {
+        if let changedBundleID {
+            pendingApplicationAudioSourceBundleIDs.insert(changedBundleID)
         }
+        applicationAudioSourceChangeDebouncer.schedule()
+    }
+
+    private func flushApplicationAudioSourceChange() {
+        let changedBundleIDs = pendingApplicationAudioSourceBundleIDs
+        pendingApplicationAudioSourceBundleIDs.removeAll(keepingCapacity: true)
+        onApplicationAudioSourceChange(changedBundleIDs)
     }
 }
 

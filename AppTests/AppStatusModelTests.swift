@@ -28,7 +28,8 @@ struct AppStatusModelTests {
         await testSelectedAppLaunchRestartsSelectedAppMixer()
         await testSelectedAppQuitRestartsDegradesAndKeepsSelection()
         await testSelectedAppRelaunchCapturesAgainWithoutReselecting()
-        await testSelectedAppProcessRestoreAvoidsGraphRestart()
+        await testSelectedAppProcessRestoreFallsBackOnSelectedAppRelaunch()
+        await testSelectedAppProcessRestoreIgnoresUnrelatedAppChurn()
         await testSelectedMicrophoneUnplugUsesTemporaryFallback()
         await testSelectedMicrophoneReturnRestoresSavedSelection()
         await testSelectedMicrophoneUnplugWithoutFallbackNeedsAttention()
@@ -720,7 +721,7 @@ struct AppStatusModelTests {
         assertEqual(model.sessionState, .ready)
     }
 
-    private static func testSelectedAppProcessRestoreAvoidsGraphRestart() async {
+    private static func testSelectedAppProcessRestoreFallsBackOnSelectedAppRelaunch() async {
         let controller = FakeLiveMixerController()
         controller.supportsSelectedAppProcessRestore = true
         let catalog = MutableFakeAppAudioSourceCatalog(sources: [])
@@ -739,17 +740,48 @@ struct AppStatusModelTests {
 
         model.refreshPrerequisites()
         catalog.sources = [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
-        model.recoverAfterApplicationAudioSourceChange()
+        model.recoverAfterApplicationAudioSourceChange(changedBundleIDs: ["com.apple.Music"])
         catalog.sources = []
-        model.recoverAfterApplicationAudioSourceChange()
+        model.recoverAfterApplicationAudioSourceChange(changedBundleIDs: ["com.apple.Music"])
         catalog.sources = [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
-        model.recoverAfterApplicationAudioSourceChange()
+        model.recoverAfterApplicationAudioSourceChange(changedBundleIDs: ["com.apple.Music"])
 
-        assertEqual(controller.startCount, 1)
-        assertEqual(controller.stopCount, 0)
+        assertEqual(controller.startCount, 3)
+        assertEqual(controller.stopCount, 2)
         assertEqual(appStore.selectedAppBundleIDs, ["com.apple.Music"])
         assertEqual(model.selectedAppAudioSourceItems.map(\.bundleID), ["com.apple.Music"])
         assertEqual(model.selectedAppAudioSourceItems.map(\.isAvailable), [true])
+        assertEqual(model.sessionState, .ready)
+    }
+
+    private static func testSelectedAppProcessRestoreIgnoresUnrelatedAppChurn() async {
+        let controller = FakeLiveMixerController()
+        controller.supportsSelectedAppProcessRestore = true
+        let catalog = MutableFakeAppAudioSourceCatalog(
+            sources: [AppAudioSource(bundleID: "com.apple.Music", name: "Music")]
+        )
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        appStore.selectedAppBundleIDs = ["com.apple.Music"]
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: catalog,
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        catalog.sources = [
+            AppAudioSource(bundleID: "com.apple.Music", name: "Music"),
+            AppAudioSource(bundleID: "org.mozilla.firefox", name: "Firefox"),
+        ]
+        model.recoverAfterApplicationAudioSourceChange(changedBundleIDs: ["org.mozilla.firefox"])
+
+        assertEqual(controller.startCount, 1)
+        assertEqual(controller.stopCount, 0)
         assertEqual(model.sessionState, .ready)
     }
 

@@ -15,6 +15,7 @@
 
 #include "MixedAudioEngine.h"
 #include "MixedAudioSharedMemory.h"
+#include "LiveMixerABI.h"
 
 static const useconds_t kMCAAggregateTapSettleMicros = 300000;
 
@@ -85,7 +86,9 @@ enum {
     kMCALiveMixerHealthSharedRingFillErrorFrames = 12,
     kMCALiveMixerHealthSharedRingFillErrorAbsFrames = 13,
     kMCALiveMixerHealthSharedRingOverrunFrames = 14,
-    kMCALiveMixerHealthCounterCount = 15
+    kMCALiveMixerHealthSystemQueueDroppedFrames = 15,
+    kMCALiveMixerHealthMicQueueDroppedFrames = 16,
+    kMCALiveMixerHealthCounterCount = 17
 };
 
 static uint64_t MCASignedInt32Bits(int32_t value)
@@ -602,10 +605,6 @@ static void MCARefreshCachedHealthLocked(MCALiveMixerContext *context)
     MixedAudioEngineHealth health;
     memset(&health, 0, sizeof(health));
     if (mixed_audio_session_get_health(context->session, &health) == 0) {
-        health.callback_error_count +=
-            atomic_load_explicit(&context->systemQueue.droppedFrameCount, memory_order_relaxed);
-        health.callback_error_count +=
-            atomic_load_explicit(&context->micQueueFrames.droppedFrameCount, memory_order_relaxed);
         context->cachedHealth = health;
     }
 }
@@ -771,17 +770,25 @@ static void MCATapIOProcAppendNoninterleaved(MCALiveMixerContext *context,
     }
 
     UInt32 frames = inputData->mBuffers[0].mDataByteSize / sizeof(float);
-    if (frames > kMCAMaxTapScratchFrames) {
+    const float *left = (const float *)inputData->mBuffers[0].mData;
+    const float *right = (const float *)inputData->mBuffers[1].mData;
+    if (left == NULL || right == NULL) {
         return;
     }
 
-    const float *left = (const float *)inputData->mBuffers[0].mData;
-    const float *right = (const float *)inputData->mBuffers[1].mData;
-    for (UInt32 frame = 0; frame < frames; frame++) {
-        context->tapScratch[(size_t)frame * kMCAOutputChannels] = left[frame];
-        context->tapScratch[(size_t)frame * kMCAOutputChannels + 1] = right[frame];
+    UInt32 offset = 0;
+    while (offset < frames) {
+        UInt32 chunkFrames = frames - offset;
+        if (chunkFrames > kMCAMaxTapScratchFrames) {
+            chunkFrames = kMCAMaxTapScratchFrames;
+        }
+        for (UInt32 frame = 0; frame < chunkFrames; frame++) {
+            context->tapScratch[(size_t)frame * kMCAOutputChannels] = left[offset + frame];
+            context->tapScratch[(size_t)frame * kMCAOutputChannels + 1] = right[offset + frame];
+        }
+        MCAEnqueueSystemFrames(context, context->tapScratch, chunkFrames);
+        offset += chunkFrames;
     }
-    MCAEnqueueSystemFrames(context, context->tapScratch, frames);
 }
 
 static OSStatus MCATapIOProc(AudioObjectID inDevice,
@@ -981,7 +988,7 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID,
         NSUUID *tapUUID = [NSUUID UUID];
         NSString *tapUID = [tapUUID UUIDString];
         CATapDescription *tapDescription = nil;
-        if (captureMode == 1) {
+        if (captureMode == MCA_LIVE_MIXER_CAPTURE_MODE_SELECTED_APPS) {
             NSArray<NSString *> *bundleIDs = MCAParseBundleIDList(selectedAppBundleIDs);
             NSArray<NSNumber *> *includedProcesses =
                 MCACopyProcessObjectIDsForBundleIDs(bundleIDs, ownProcessObject);
@@ -1099,6 +1106,10 @@ int32_t MCA_LiveMixerCopyHealthCounters(uint64_t *outCounters, uint32_t counterC
     }
 
     MixedAudioEngineHealth health = gMixer.cachedHealth;
+    uint64_t systemQueueDroppedFrames =
+        atomic_load_explicit(&gMixer.systemQueue.droppedFrameCount, memory_order_relaxed);
+    uint64_t micQueueDroppedFrames =
+        atomic_load_explicit(&gMixer.micQueueFrames.droppedFrameCount, memory_order_relaxed);
     pthread_mutex_unlock(&gMixer.mutex);
 
     outCounters[kMCALiveMixerHealthFramesMixed] = health.frames_mixed;
@@ -1119,5 +1130,7 @@ int32_t MCA_LiveMixerCopyHealthCounters(uint64_t *outCounters, uint32_t counterC
         health.shared_ring_fill_error_abs_frames;
     outCounters[kMCALiveMixerHealthSharedRingOverrunFrames] =
         health.shared_ring_overrun_frames;
+    outCounters[kMCALiveMixerHealthSystemQueueDroppedFrames] = systemQueueDroppedFrames;
+    outCounters[kMCALiveMixerHealthMicQueueDroppedFrames] = micQueueDroppedFrames;
     return 0;
 }

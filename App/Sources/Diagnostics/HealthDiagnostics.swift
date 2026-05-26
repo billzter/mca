@@ -13,6 +13,8 @@ struct HealthSnapshot: Equatable {
     var clippedSamples: UInt64
     var systemQueueFrames: UInt32
     var micQueueFrames: UInt32
+    var systemQueueDroppedFrames: UInt64 = 0
+    var micQueueDroppedFrames: UInt64 = 0
     var sourceFrameDelta: Int32
     var sourceFrameDeltaAbs: UInt32
     var systemDriftDropFrames: UInt64
@@ -354,6 +356,20 @@ struct HealthDiagnosticSummary: Equatable {
             )
         )
 
+        let sourceQueueDroppedFrames = snapshot.systemQueueDroppedFrames + snapshot.micQueueDroppedFrames
+        if sourceQueueDroppedFrames > 0 {
+            userVisibleFindings.append(
+                DiagnosticTerm(
+                    id: "source_queue_dropped_frames",
+                    name: "Source Queue Drops",
+                    value: "system=\(snapshot.systemQueueDroppedFrames), mic=\(snapshot.micQueueDroppedFrames)",
+                    explanation: "Source callbacks delivered more frames than the mixer queue could accept without blocking.",
+                    visibility: .userVisible
+                )
+            )
+            recommendedActions.append("Keep recording if this was brief; reduce system load if source queue drops repeat.")
+        }
+
         if snapshot.callbackErrorCount > 0 {
             userVisibleFindings.append(
                 DiagnosticTerm(
@@ -373,6 +389,7 @@ struct HealthDiagnosticSummary: Equatable {
         } else if snapshot.systemUnderrunFrames > 0 ||
             snapshot.micUnderrunFrames > 0 ||
             snapshot.clippedSamples > 0 ||
+            sourceQueueDroppedFrames > 0 ||
             (snapshot.sharedRingOverrunFrames > 0 && !waitingForRecorder)
         {
             severity = .degraded
@@ -399,6 +416,8 @@ struct HealthDiagnosticSummary: Equatable {
             "clipped_samples=\(snapshot.clippedSamples)",
             "system_queue_frames=\(snapshot.systemQueueFrames)",
             "mic_queue_frames=\(snapshot.micQueueFrames)",
+            "system_queue_dropped_frames=\(snapshot.systemQueueDroppedFrames)",
+            "mic_queue_dropped_frames=\(snapshot.micQueueDroppedFrames)",
             "source_frame_delta=\(snapshot.sourceFrameDelta)",
             "source_frame_delta_abs=\(snapshot.sourceFrameDeltaAbs)",
             "system_drift_drop_frames=\(snapshot.systemDriftDropFrames)",

@@ -935,10 +935,8 @@ static OSStatus MixedAudio_GetZeroTimeStamp(AudioServerPlugInDriverRef inDriver,
     }
 
     UInt64 now = mach_absolute_time();
-    mach_timebase_info_data_t timebase;
-    mach_timebase_info(&timebase);
     UInt64 elapsed = now > gStartHostTime ? now - gStartHostTime : 0;
-    Float64 elapsed_nanos = (Float64)elapsed * (Float64)timebase.numer / (Float64)timebase.denom;
+    Float64 elapsed_nanos = (Float64)elapsed * (Float64)gTimebase.numer / (Float64)gTimebase.denom;
     *outSampleTime = elapsed_nanos * ((Float64)MIXED_AUDIO_OUTPUT_SAMPLE_RATE / 1000000000.0);
     *outHostTime = now;
     *outSeed = 1;

@@ -45,6 +45,7 @@ clang \
   -Wextra \
   -Werror \
   -mmacosx-version-min="$MACOSX_DEPLOYMENT_TARGET" \
+  -I App/Sources/Audio \
   -I HALPlugin/Include \
   -I Generated/include \
   -c App/Sources/Audio/LiveMixerSession.m \
@@ -67,6 +68,7 @@ swiftc \
   App/Sources/App/MicrophonePermissionRequester.swift \
   App/Sources/App/SystemAudioAccessTester.swift \
   App/Sources/App/LaunchAtStartupController.swift \
+  App/Sources/App/DebouncedMainActorAction.swift \
   App/Sources/App/AppLiveMixerController.swift \
   App/Sources/App/AppStatusModel.swift \
   App/Sources/App/AppServices.swift \
