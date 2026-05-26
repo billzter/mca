@@ -239,10 +239,9 @@ private final class DeviceChangeObserver {
                 object: nil,
                 queue: .main
             ) { notification in
+                let changedBundleID = Self.bundleID(fromWorkspaceNotification: notification)
                 Task { @MainActor [weak self] in
-                    self?.applicationAudioSourceChangeSoon(
-                        changedBundleID: Self.bundleID(fromWorkspaceNotification: notification)
-                    )
+                    self?.applicationAudioSourceChangeSoon(changedBundleID: changedBundleID)
                 }
             }
         )
@@ -252,10 +251,9 @@ private final class DeviceChangeObserver {
                 object: nil,
                 queue: .main
             ) { notification in
+                let changedBundleID = Self.bundleID(fromWorkspaceNotification: notification)
                 Task { @MainActor [weak self] in
-                    self?.applicationAudioSourceChangeSoon(
-                        changedBundleID: Self.bundleID(fromWorkspaceNotification: notification)
-                    )
+                    self?.applicationAudioSourceChangeSoon(changedBundleID: changedBundleID)
                 }
             }
         )
@@ -277,7 +275,7 @@ private final class DeviceChangeObserver {
         }
     }
 
-    private static func bundleID(fromWorkspaceNotification notification: Notification) -> String? {
+    nonisolated private static func bundleID(fromWorkspaceNotification notification: Notification) -> String? {
         let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         return app?.bundleIdentifier
     }
