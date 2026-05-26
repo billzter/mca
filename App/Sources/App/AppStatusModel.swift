@@ -36,6 +36,7 @@ final class AppStatusModel: ObservableObject {
     @Published var selectedAppAudioSourceItems: [AppAudioSourceItem] = []
     @Published var selectedAppBundleIDs: [String] = []
     @Published var lastHealthSnapshot: HealthSnapshot = .empty
+    @Published var sharedRingStats: SharedRingStats = .empty
     @Published var launchAtStartupStatus: LaunchAtStartupStatus = .unknown
     @Published var launchAtStartupErrorMessage: String?
     private var runningMixerConfiguration: LiveMixerStartConfiguration?
@@ -44,6 +45,7 @@ final class AppStatusModel: ObservableObject {
     private var lastKnownSelectedMicrophoneName: String?
     private var knownMicrophoneNames: [String: String] = [:]
     private var knownAppAudioSourceNames: [String: String] = [:]
+    private var sharedRingStatsAccumulator = SharedRingStatsAccumulator()
 
     init(
         prerequisiteChecker: PrerequisiteChecking,
@@ -294,6 +296,7 @@ final class AppStatusModel: ObservableObject {
         captureMode = mode
         appAudioSelectionStore.captureMode = mode
         refreshAppAudioSources()
+        sessionState = resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup)
         reconcileLiveMixer()
     }
 
@@ -310,6 +313,7 @@ final class AppStatusModel: ObservableObject {
         appAudioSelectionStore.selectedAppBundleIDs = selected
         selectedAppBundleIDs = appAudioSelectionStore.selectedAppBundleIDs
         refreshAppAudioSources()
+        sessionState = resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup)
         reconcileLiveMixer()
     }
 
@@ -435,9 +439,27 @@ final class AppStatusModel: ObservableObject {
     }
 
     func refreshLiveMixerHealth() {
-        let snapshot = liveMixerController.currentHealthSnapshot() ?? .empty
+        guard let snapshot = liveMixerController.currentHealthSnapshot() else {
+            sharedRingStatsAccumulator.reset()
+            sharedRingStats = .empty
+            if lastHealthSnapshot != .empty {
+                lastHealthSnapshot = .empty
+            }
+            return
+        }
         if snapshot != lastHealthSnapshot {
             lastHealthSnapshot = snapshot
+        }
+        if snapshot.framesMixed == 0 {
+            sharedRingStatsAccumulator.reset()
+        } else {
+            sharedRingStatsAccumulator.record(
+                snapshot: snapshot,
+                recorderActive: liveMixerController.isVirtualAudioDeviceRunning()
+            )
+        }
+        if sharedRingStats != sharedRingStatsAccumulator.summary {
+            sharedRingStats = sharedRingStatsAccumulator.summary
         }
     }
 
@@ -836,6 +858,10 @@ private final class NullLiveMixerController: LiveMixerControlling {
 
     @MainActor func currentHealthSnapshot() -> HealthSnapshot? {
         nil
+    }
+
+    @MainActor func isVirtualAudioDeviceRunning() -> Bool {
+        false
     }
 }
 

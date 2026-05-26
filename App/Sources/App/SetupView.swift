@@ -96,7 +96,7 @@ struct SetupView: View {
     }
 
     private var diagnostics: some View {
-        DiagnosticsDefinitionsView(summary: model.healthSummary)
+        DiagnosticsDefinitionsView(summary: model.healthSummary, sharedRingStats: model.sharedRingStats)
             .padding(.top, 2)
     }
 }
@@ -181,9 +181,7 @@ private struct AppAudioSelectionPanel: View {
                 .frame(width: 220)
             }
 
-            if model.captureMode == .selectedApps {
-                selectedAppsArea
-            }
+            selectedAppsArea
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -193,7 +191,9 @@ private struct AppAudioSelectionPanel: View {
     private var selectionMessage: String {
         switch model.captureMode {
         case .globalSystemAudio:
-            "Capturing system-wide app audio."
+            model.selectedAppBundleIDs.isEmpty
+                ? "Capturing system-wide app audio."
+                : "Capturing system-wide app audio. Selected apps are ready."
         case .selectedApps:
             model.selectedAppBundleIDs.isEmpty ? "Choose at least one app." : "Capturing selected app audio."
         }
@@ -668,6 +668,7 @@ private struct ActionPanel<Actions: View>: View {
 
 private struct DiagnosticsDefinitionsView: View {
     let summary: HealthDiagnosticSummary
+    let sharedRingStats: SharedRingStats
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -677,8 +678,10 @@ private struct DiagnosticsDefinitionsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            SharedRingStatsView(stats: sharedRingStats)
+
             VStack(alignment: .leading, spacing: 5) {
-                ForEach(summary.diagnosticsOnlyTerms.prefix(4)) { term in
+                ForEach(summary.diagnosticsOnlyTerms.filter { $0.id != "shared_ring_fill" }.prefix(3)) { term in
                     HStack(alignment: .firstTextBaseline) {
                         Text(term.name)
                             .frame(width: 150, alignment: .leading)
@@ -690,6 +693,75 @@ private struct DiagnosticsDefinitionsView: View {
                     .font(.caption)
                 }
             }
+        }
+    }
+}
+
+private struct SharedRingStatsView: View {
+    let stats: SharedRingStats
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Shared Ring")
+                    .frame(width: 150, alignment: .leading)
+                    .foregroundStyle(.secondary)
+                Text(stats.compactValue)
+                    .foregroundStyle(statusColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .font(.caption)
+
+            DisclosureGroup("Shared Ring Details") {
+                VStack(alignment: .leading, spacing: 4) {
+                    SharedRingDetailRow(label: "Target Fill", value: "\(SharedRingStats.targetFillFrames) frames / \(SharedRingStats.msString(SharedRingStats.targetFillFrames))")
+                    SharedRingDetailRow(label: "Current Fill", value: stats.currentFillValue)
+                    SharedRingDetailRow(label: "Current Error", value: stats.currentErrorValue)
+                    SharedRingDetailRow(label: "Mean Error", value: SharedRingStats.signedMsString(Int32(clamping: Int(stats.meanErrorFrames.rounded()))))
+                    SharedRingDetailRow(label: "p95 Abs Error", value: SharedRingStats.msString(stats.p95AbsErrorFrames))
+                    SharedRingDetailRow(label: "p99 Abs Error", value: SharedRingStats.msString(stats.p99AbsErrorFrames))
+                    SharedRingDetailRow(label: "Max Abs Error", value: SharedRingStats.msString(stats.maxAbsErrorFrames))
+                    SharedRingDetailRow(label: "Overrun Frames", value: "\(stats.overrunFrames)")
+                    SharedRingDetailRow(label: "Samples", value: "\(stats.sampleCount)")
+                }
+                .padding(.top, 4)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .disabled(stats.sampleCount == 0)
+        }
+    }
+
+    private var statusColor: Color {
+        switch stats.status {
+        case .noRecorder:
+            .secondary
+        case .warmingUp:
+            .secondary
+        case .stable:
+            .green
+        case .watch:
+            .orange
+        case .overrun:
+            .red
+        case .waitingForRecorder:
+            .secondary
+        case .recorderActive:
+            .secondary
+        }
+    }
+}
+
+private struct SharedRingDetailRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .frame(width: 150, alignment: .leading)
+            Text(value)
         }
     }
 }

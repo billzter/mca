@@ -18,7 +18,7 @@ fn default_config() -> MixedAudioEngineConfig {
 fn config_and_health_have_stable_c_layout() {
     assert_eq!(std::mem::size_of::<MixedAudioEngineConfig>(), 20);
     assert_eq!(std::mem::align_of::<MixedAudioEngineConfig>(), 4);
-    assert_eq!(std::mem::size_of::<MixedAudioEngineHealth>(), 72);
+    assert_eq!(std::mem::size_of::<MixedAudioEngineHealth>(), 96);
     assert_eq!(std::mem::align_of::<MixedAudioEngineHealth>(), 8);
     assert_eq!(MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE, 48_000);
     assert_eq!(MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS, 2);
@@ -188,6 +188,63 @@ fn c_abi_null_handle_is_rejected() {
 }
 
 #[test]
+fn c_abi_invalid_inputs_fail_closed_before_panic_paths() {
+    use mixed_audio_engine::session::{
+        mixed_audio_session_create, mixed_audio_session_get_health,
+        mixed_audio_session_mix_and_write, MixedAudioSessionConfig, MixedAudioSessionHandle,
+    };
+
+    let invalid_engine = MixedAudioEngineConfig {
+        source_capacity_frames: 0,
+        ..default_config()
+    };
+    let engine_handle = unsafe { mixed_audio_engine::mixed_audio_engine_create(invalid_engine) };
+    assert!(engine_handle.is_null());
+
+    let valid_engine = unsafe { mixed_audio_engine::mixed_audio_engine_create(default_config()) };
+    assert!(!valid_engine.is_null());
+    assert_eq!(
+        unsafe {
+            mixed_audio_engine::mixed_audio_engine_push_system_interleaved_stereo(
+                valid_engine,
+                std::ptr::null(),
+                128,
+            )
+        },
+        0
+    );
+    assert_eq!(
+        unsafe {
+            mixed_audio_engine::mixed_audio_engine_get_health(valid_engine, std::ptr::null_mut())
+        },
+        -1
+    );
+    unsafe { mixed_audio_engine::mixed_audio_engine_destroy(valid_engine) };
+
+    let invalid_session = MixedAudioSessionConfig {
+        shared_memory_capacity_frames: 0,
+        ..MixedAudioSessionConfig::default()
+    };
+    let session_handle = unsafe { mixed_audio_session_create(invalid_session) };
+    assert!(session_handle.is_null());
+    assert_eq!(
+        unsafe {
+            mixed_audio_session_mix_and_write(std::ptr::null_mut::<MixedAudioSessionHandle>(), 512)
+        },
+        0
+    );
+    assert_eq!(
+        unsafe {
+            mixed_audio_session_get_health(
+                std::ptr::null::<MixedAudioSessionHandle>(),
+                std::ptr::null_mut(),
+            )
+        },
+        -1
+    );
+}
+
+#[test]
 fn shared_memory_header_matches_c_abi_layout() {
     use mixed_audio_engine::shared_memory::{
         MixedAudioSharedMemoryHeader, MIXED_AUDIO_SHM_MAGIC, MIXED_AUDIO_SHM_NAME,
@@ -209,7 +266,7 @@ fn shared_memory_writer_tracks_indices_and_counters() {
     let mut layout = SharedMemoryLayout::new_for_test(16);
     assert_eq!(layout.header().capacity_frames, 16);
 
-    layout.write_frames(0, &[0.25, -0.25, 0.50, -0.50], 1, 1234);
+    let status = layout.write_frames(0, &[0.25, -0.25, 0.50, -0.50], 1, 1234);
     assert_eq!(layout.header().write_frame_index.load(Ordering::Acquire), 2);
     assert_eq!(layout.header().generation.load(Ordering::Acquire), 1);
     assert_eq!(
@@ -223,12 +280,115 @@ fn shared_memory_writer_tracks_indices_and_counters() {
     assert_eq!(layout.frames()[1], -0.25);
     assert_eq!(layout.frames()[2], 0.50);
     assert_eq!(layout.frames()[3], -0.50);
+    assert_eq!(status.fill_frames, 2);
+    assert_eq!(status.fill_error_frames, -2398);
+    assert_eq!(status.fill_error_abs_frames, 2398);
+    assert_eq!(status.overrun_frames, 0);
 
     layout.increment_clipped_frames(3);
     assert_eq!(
         layout.header().clipped_frame_count.load(Ordering::Relaxed),
         3
     );
+}
+
+#[test]
+fn shared_memory_writer_reports_reader_fill_error_and_overruns() {
+    use mixed_audio_engine::shared_memory::SharedMemoryLayout;
+
+    let mut layout = SharedMemoryLayout::new_for_test(4_800);
+    layout
+        .header()
+        .read_frame_index
+        .store(20, Ordering::Release);
+
+    let status = layout.write_frames(2_420, &[0.0; 4 * 2], 1, 1234);
+
+    assert_eq!(
+        layout.header().write_frame_index.load(Ordering::Acquire),
+        2_424
+    );
+    assert_eq!(status.fill_frames, 2_404);
+    assert_eq!(status.fill_error_frames, 4);
+    assert_eq!(status.fill_error_abs_frames, 4);
+    assert_eq!(status.overrun_frames, 0);
+    assert_eq!(layout.header().overrun_count.load(Ordering::Relaxed), 0);
+
+    layout
+        .header()
+        .read_frame_index
+        .store(2_400, Ordering::Release);
+    let overrun = layout.write_frames(7_196, &[0.0; 8 * 2], 1, 1235);
+
+    assert_eq!(overrun.fill_frames, 4_800);
+    assert_eq!(overrun.fill_error_frames, 2_400);
+    assert_eq!(overrun.fill_error_abs_frames, 2_400);
+    assert_eq!(overrun.overrun_frames, 4);
+    assert_eq!(layout.header().overrun_count.load(Ordering::Relaxed), 4);
+    assert_eq!(
+        layout.header().dropped_frame_count.load(Ordering::Relaxed),
+        4
+    );
+}
+
+#[test]
+fn shared_memory_writer_counts_only_newly_overwritten_frames() {
+    use mixed_audio_engine::shared_memory::SharedMemoryLayout;
+
+    let mut layout = SharedMemoryLayout::new_for_test(4_800);
+    layout.header().read_frame_index.store(0, Ordering::Release);
+
+    let full = layout.write_frames(0, &vec![0.0; 4_800 * 2], 1, 1234);
+    assert_eq!(full.fill_frames, 4_800);
+    assert_eq!(full.overrun_frames, 0);
+    assert_eq!(layout.header().overrun_count.load(Ordering::Relaxed), 0);
+
+    let first_overrun = layout.write_frames(4_800, &vec![0.0; 512 * 2], 1, 1235);
+    assert_eq!(first_overrun.fill_frames, 4_800);
+    assert_eq!(first_overrun.overrun_frames, 512);
+    assert_eq!(layout.header().overrun_count.load(Ordering::Relaxed), 512);
+
+    let second_overrun = layout.write_frames(5_312, &vec![0.0; 512 * 2], 1, 1236);
+    assert_eq!(second_overrun.fill_frames, 4_800);
+    assert_eq!(second_overrun.overrun_frames, 512);
+    assert_eq!(layout.header().overrun_count.load(Ordering::Relaxed), 1_024);
+}
+
+#[test]
+fn posix_shared_memory_writer_creates_hal_writable_object() {
+    use mixed_audio_engine::shared_memory::MIXED_AUDIO_SHM_MODE;
+
+    assert_eq!(MIXED_AUDIO_SHM_MODE, 0o666);
+}
+
+#[test]
+fn shared_ring_fill_error_stats_report_percentiles() {
+    use mixed_audio_engine::shared_memory::{
+        SharedMemoryLayout, SharedRingFillErrorStats, MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES,
+    };
+
+    let mut layout = SharedMemoryLayout::new_for_test(4_800);
+    let desired_errors = [-12, -4, -1, 0, 1, 3, 5, 8, 13, 21];
+    let mut observed_errors = Vec::with_capacity(desired_errors.len());
+    for error in desired_errors {
+        layout.header().read_frame_index.store(0, Ordering::Release);
+        let first_frame =
+            (MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES as i64 + i64::from(error) - 1).max(0) as u64;
+        let status = layout.write_frames(first_frame, &[0.0, 0.0], 1, 1234);
+        observed_errors.push(status.fill_error_frames);
+    }
+
+    assert_eq!(observed_errors, desired_errors);
+    let stats = SharedRingFillErrorStats::from_errors(&observed_errors).unwrap();
+
+    assert_eq!(stats.sample_count, 10);
+    assert_eq!(stats.min_frames, -12);
+    assert_eq!(stats.max_frames, 21);
+    assert_eq!(stats.max_abs_frames, 21);
+    assert!((stats.mean_frames - 3.4).abs() < 0.000_001);
+    assert_eq!(stats.p95_abs_frames, 21);
+    assert_eq!(stats.p99_abs_frames, 21);
+    assert!(SharedRingFillErrorStats::from_errors(&[]).is_none());
 }
 
 #[test]
@@ -257,7 +417,12 @@ fn session_writes_real_capture_buffers_to_shared_memory() {
         5678
     );
     assert_eq!(&layout.frames()[..4], &[0.30, -0.10, 0.30, -0.50]);
-    assert_eq!(session.health().frames_mixed, 2);
+    let health = session.health();
+    assert_eq!(health.frames_mixed, 2);
+    assert_eq!(health.shared_ring_fill_frames, 2);
+    assert_eq!(health.shared_ring_fill_error_frames, -2398);
+    assert_eq!(health.shared_ring_fill_error_abs_frames, 2398);
+    assert_eq!(health.shared_ring_overrun_frames, 0);
 }
 
 #[test]

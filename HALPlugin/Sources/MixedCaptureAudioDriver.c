@@ -254,25 +254,6 @@ static OSStatus write_cfstring(UInt32 inDataSize,
     return noErr;
 }
 
-static void fill_silence(void *buffer, UInt32 frame_count)
-{
-    if (buffer == NULL || frame_count == 0) {
-        return;
-    }
-
-    AudioBufferList *buffer_list = (AudioBufferList *)buffer;
-    if (buffer_list->mNumberBuffers > 0 && buffer_list->mNumberBuffers <= 8) {
-        for (UInt32 i = 0; i < buffer_list->mNumberBuffers; i++) {
-            if (buffer_list->mBuffers[i].mData != NULL) {
-                memset(buffer_list->mBuffers[i].mData, 0, buffer_list->mBuffers[i].mDataByteSize);
-            }
-        }
-        return;
-    }
-
-    memset(buffer, 0, frame_count * MIXED_AUDIO_OUTPUT_CHANNEL_COUNT * sizeof(Float32));
-}
-
 static uint64_t host_time_to_nanos(uint64_t host_time)
 {
     if (gTimebase.denom == 0) {
@@ -300,23 +281,6 @@ static void read_shared_memory_audio(void *buffer,
     }
 
     uint64_t now_nanos = io_cycle_now_nanos(cycle_info);
-    size_t expected_byte_count = mixed_audio_shm_frame_byte_count(frame_count);
-    AudioBufferList *buffer_list = (AudioBufferList *)buffer;
-    if (buffer_list->mNumberBuffers > 0 && buffer_list->mNumberBuffers <= 8) {
-        if (buffer_list->mNumberBuffers == 1 &&
-            buffer_list->mBuffers[0].mData != NULL &&
-            buffer_list->mBuffers[0].mDataByteSize >= expected_byte_count) {
-            mixed_audio_shm_reader_read_at_time(&gSharedMemoryReader,
-                                                (float *)buffer_list->mBuffers[0].mData,
-                                                frame_count,
-                                                now_nanos,
-                                                NULL);
-            return;
-        }
-        fill_silence(buffer, frame_count);
-        return;
-    }
-
     mixed_audio_shm_reader_read_at_time(&gSharedMemoryReader,
                                         (float *)buffer,
                                         frame_count,
@@ -497,6 +461,7 @@ static Boolean MixedAudio_HasProperty(AudioServerPlugInDriverRef inDriver,
                        inAddress->mSelector == kAudioDevicePropertyClockDomain ||
                        inAddress->mSelector == kAudioDevicePropertyDeviceIsAlive ||
                        inAddress->mSelector == kAudioDevicePropertyDeviceIsRunning ||
+                       inAddress->mSelector == kAudioDevicePropertyDeviceIsRunningSomewhere ||
                        inAddress->mSelector == kAudioObjectPropertyControlList ||
                        inAddress->mSelector == kAudioDevicePropertyNominalSampleRate ||
                        inAddress->mSelector == kAudioDevicePropertyAvailableNominalSampleRates ||
@@ -654,6 +619,7 @@ static OSStatus MixedAudio_GetPropertyDataSize(AudioServerPlugInDriverRef inDriv
         case kAudioDevicePropertyTransportType:
         case kAudioDevicePropertyDeviceIsAlive:
         case kAudioDevicePropertyDeviceIsRunning:
+        case kAudioDevicePropertyDeviceIsRunningSomewhere:
         case kAudioDevicePropertyDeviceCanBeDefaultDevice:
         case kAudioDevicePropertyDeviceCanBeDefaultSystemDevice:
         case kAudioDevicePropertyLatency:
@@ -794,6 +760,7 @@ static OSStatus MixedAudio_GetPropertyData(AudioServerPlugInDriverRef inDriver,
                     value = 1;
                     return write_data(sizeof(value), inDataSize, outDataSize, outData, &value);
                 case kAudioDevicePropertyDeviceIsRunning:
+                case kAudioDevicePropertyDeviceIsRunningSomewhere:
                     value = gActiveIOClientCount > 0 ? 1 : 0;
                     return write_data(sizeof(value), inDataSize, outDataSize, outData, &value);
                 case kAudioDevicePropertyDeviceCanBeDefaultDevice:

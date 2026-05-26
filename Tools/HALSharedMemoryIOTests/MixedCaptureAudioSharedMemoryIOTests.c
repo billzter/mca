@@ -68,7 +68,7 @@ static mixed_audio_shm_header_t *create_test_mapping(size_t *out_byte_count)
     shm_unlink(MIXED_AUDIO_SHM_NAME);
 
     size_t byte_count = mixed_audio_shm_total_byte_count(kTestCapacityFrames);
-    int fd = shm_open(MIXED_AUDIO_SHM_NAME, O_CREAT | O_EXCL | O_RDWR, 0644);
+    int fd = shm_open(MIXED_AUDIO_SHM_NAME, O_CREAT | O_EXCL | O_RDWR, 0666);
     if (fd < 0) {
         fprintf(stderr, "shm_open failed: errno=%d (%s)\n", errno, strerror(errno));
         fail("create shared memory");
@@ -143,9 +143,9 @@ int main(void)
     expect_status(driver->StartIO(driver_ref, kMixedAudioObjectID_Device, 1), "start IO");
 
     float audio[kTestFrameCount * MIXED_AUDIO_OUTPUT_CHANNEL_COUNT];
-    for (size_t i = 0; i < sizeof(audio) / sizeof(audio[0]); i++) {
-        audio[i] = 9.0f;
-    }
+    memset(audio, 0, sizeof(audio));
+    uint32_t ambiguous_first_word = 1;
+    memcpy(audio, &ambiguous_first_word, sizeof(ambiguous_first_word));
     AudioServerPlugInIOCycleInfo cycle_info = {0};
     expect_status(driver->DoIOOperation(driver_ref,
                                         kMixedAudioObjectID_Device,

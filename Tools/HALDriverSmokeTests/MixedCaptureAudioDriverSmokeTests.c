@@ -129,6 +129,8 @@ int main(void)
         driver->HasProperty == NULL ||
         driver->GetPropertyDataSize == NULL ||
         driver->GetPropertyData == NULL ||
+        driver->StartIO == NULL ||
+        driver->StopIO == NULL ||
         driver->WillDoIOOperation == NULL ||
         driver->DoIOOperation == NULL) {
         fail("required callback is NULL");
@@ -244,6 +246,14 @@ int main(void)
                   kAudioDevicePropertyIsHidden, kAudioObjectPropertyScopeGlobal, 0);
     expect_uint32(driver, driver_ref, kMixedAudioObjectID_Device,
                   kAudioDevicePropertyZeroTimeStampPeriod, kAudioObjectPropertyScopeGlobal, 16384);
+    expect_uint32(driver, driver_ref, kMixedAudioObjectID_Device,
+                  kAudioDevicePropertyDeviceIsRunningSomewhere, kAudioObjectPropertyScopeGlobal, 0);
+    expect_status(driver->StartIO(driver_ref, kMixedAudioObjectID_Device, 1), "start IO");
+    expect_uint32(driver, driver_ref, kMixedAudioObjectID_Device,
+                  kAudioDevicePropertyDeviceIsRunningSomewhere, kAudioObjectPropertyScopeGlobal, 1);
+    expect_status(driver->StopIO(driver_ref, kMixedAudioObjectID_Device, 1), "stop IO");
+    expect_uint32(driver, driver_ref, kMixedAudioObjectID_Device,
+                  kAudioDevicePropertyDeviceIsRunningSomewhere, kAudioObjectPropertyScopeGlobal, 0);
     expect_uint32(driver, driver_ref, kMixedAudioObjectID_Device,
                   kMCAAudioDevicePropertyDriverCompatibilityVersion,
                   kAudioObjectPropertyScopeGlobal,

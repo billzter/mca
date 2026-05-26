@@ -8,6 +8,13 @@ struct HealthDiagnosticsTests {
         testCallbackErrorsAreFailedAndUserVisible()
         testClippingIsDegradedButNotFailed()
         testDriftCorrectionIsDiagnosticsOnlyWhenNoAudioWasLost()
+        testSharedRingFillIsDiagnosticsOnlyWhenNoFramesAreLost()
+        testSharedRingOverrunIsDegradedAndUserVisible()
+        testSharedRingAccumulatorIgnoresWarmupAndReportsPercentiles()
+        testSharedRingAccumulatorReportsOverrunsSinceBaseline()
+        testSharedRingAccumulatorReportsOverrunsOnlyWithinRollingWindow()
+        testSharedRingAccumulatorShowsRecorderActiveWhenFeedbackIsBlind()
+        testSharedRingAccumulatorResetsRollingWindowWithoutRecorder()
         testDiagnosticReportIsMetadataOnly()
         print("health diagnostics tests passed")
     }
@@ -67,10 +74,121 @@ struct HealthDiagnosticsTests {
         assertContains(summary.diagnosticsOnlyTerms.map(\.name), "Source Drift Correction")
     }
 
+    private static func testSharedRingFillIsDiagnosticsOnlyWhenNoFramesAreLost() {
+        var snapshot = HealthSnapshot.cleanRunning
+        snapshot.sharedRingFillFrames = 2_404
+        snapshot.sharedRingFillErrorFrames = 4
+        snapshot.sharedRingFillErrorAbsFrames = 4
+
+        let summary = HealthDiagnosticSummary(snapshot: snapshot)
+
+        assertEqual(summary.severity, .good)
+        assertFalse(summary.userVisibleFindings.map(\.name).contains("Shared Ring Fill"))
+        assertContains(summary.diagnosticsOnlyTerms.map(\.name), "Shared Ring Fill")
+    }
+
+    private static func testSharedRingOverrunIsDegradedAndUserVisible() {
+        var snapshot = HealthSnapshot.cleanRunning
+        snapshot.sharedRingFillFrames = 4_804
+        snapshot.sharedRingFillErrorFrames = 2_404
+        snapshot.sharedRingFillErrorAbsFrames = 2_404
+        snapshot.sharedRingOverrunFrames = 4
+
+        let summary = HealthDiagnosticSummary(snapshot: snapshot)
+
+        assertEqual(summary.severity, .degraded)
+        assertContains(summary.userVisibleFindings.map(\.name), "Shared Ring Overrun")
+        assertContains(summary.recommendedActions, "Keep recording if this was brief; restart the app if shared-ring overruns repeat.")
+    }
+
+    private static func testSharedRingAccumulatorIgnoresWarmupAndReportsPercentiles() {
+        var accumulator = SharedRingStatsAccumulator(maxSamples: 5, warmupSamples: 2)
+
+        for error in [999, -999, -48, 0, 96, 240, 480, 24] {
+            accumulator.record(snapshot: snapshot(fill: 2_400 + error, error: error, overrun: 0), recorderActive: true)
+        }
+
+        let stats = accumulator.summary
+
+        assertEqual(stats.sampleCount, 5)
+        assertEqual(stats.status, .watch)
+        assertEqual(stats.minErrorFrames, 0)
+        assertEqual(stats.maxErrorFrames, 480)
+        assertEqual(stats.maxAbsErrorFrames, 480)
+        assertEqual(stats.p95AbsErrorFrames, 480)
+        assertEqual(stats.p99AbsErrorFrames, 480)
+        assertStringContains(stats.compactValue, "Watch")
+        assertStringContains(stats.compactValue, "p99 10.0 ms")
+    }
+
+    private static func testSharedRingAccumulatorReportsOverrunsSinceBaseline() {
+        var accumulator = SharedRingStatsAccumulator(maxSamples: 10, warmupSamples: 0)
+
+        accumulator.record(snapshot: snapshot(fill: 2_400, error: 0, overrun: 10), recorderActive: true)
+        accumulator.record(snapshot: snapshot(fill: 2_404, error: 4, overrun: 14), recorderActive: true)
+
+        let stats = accumulator.summary
+
+        assertEqual(stats.sampleCount, 2)
+        assertEqual(stats.status, .overrun)
+        assertEqual(stats.overrunFrames, 4)
+        assertStringContains(stats.compactValue, "Overrun")
+        assertStringContains(stats.compactValue, "overruns 4")
+    }
+
+    private static func testSharedRingAccumulatorReportsOverrunsOnlyWithinRollingWindow() {
+        var accumulator = SharedRingStatsAccumulator(maxSamples: 3, warmupSamples: 0)
+
+        for overrun in [1_000, 2_000, 3_000, 4_000, 5_000] {
+            accumulator.record(
+                snapshot: snapshot(fill: 2_404, error: 4, overrun: UInt64(overrun)),
+                recorderActive: true
+            )
+        }
+
+        let stats = accumulator.summary
+
+        assertEqual(stats.sampleCount, 3)
+        assertEqual(stats.overrunFrames, 2_000)
+        assertStringContains(stats.compactValue, "overruns 2000")
+    }
+
+    private static func testSharedRingAccumulatorShowsRecorderActiveWhenFeedbackIsBlind() {
+        var accumulator = SharedRingStatsAccumulator(maxSamples: 10, warmupSamples: 0)
+
+        accumulator.record(snapshot: snapshot(fill: 4_800, error: 2_400, overrun: 0), recorderActive: true)
+        accumulator.record(snapshot: snapshot(fill: 12_000, error: 9_600, overrun: 91_200), recorderActive: true)
+
+        let stats = accumulator.summary
+
+        assertEqual(stats.status, .recorderActive)
+        assertStringContains(stats.compactValue, "Recorder Active")
+        assertStringContains(stats.compactValue, "fill")
+        assertFalse(stats.compactValue.contains("p99"))
+    }
+
+    private static func testSharedRingAccumulatorResetsRollingWindowWithoutRecorder() {
+        var accumulator = SharedRingStatsAccumulator(maxSamples: 10, warmupSamples: 0)
+
+        accumulator.record(snapshot: snapshot(fill: 2_404, error: 4, overrun: 0), recorderActive: true)
+        accumulator.record(snapshot: snapshot(fill: 12_000, error: 9_600, overrun: 9_600), recorderActive: false)
+        accumulator.record(snapshot: snapshot(fill: 12_000, error: 9_600, overrun: 19_200), recorderActive: false)
+
+        let stats = accumulator.summary
+
+        assertEqual(stats.status, .noRecorder)
+        assertEqual(stats.sampleCount, 0)
+        assertEqual(stats.overrunFrames, 0)
+        assertStringContains(stats.compactValue, "No Recorder")
+        assertFalse(stats.compactValue.contains("p99"))
+    }
+
     private static func testDiagnosticReportIsMetadataOnly() {
         var snapshot = HealthSnapshot.cleanRunning
         snapshot.framesMixed = 2_880_000
         snapshot.micDriftDropFrames = 336
+        snapshot.sharedRingFillFrames = 2_404
+        snapshot.sharedRingFillErrorFrames = 4
 
         let report = HealthDiagnosticSummary(snapshot: snapshot).metadataReportLines()
 
@@ -78,10 +196,21 @@ struct HealthDiagnosticsTests {
         assertStringContains(report, "frames_mixed=2880000")
         assertStringContains(report, "clipped_samples=0")
         assertStringContains(report, "mic_drift_drop_frames=336")
+        assertStringContains(report, "shared_ring_fill_frames=2404")
+        assertStringContains(report, "shared_ring_fill_error_frames=4")
         assertFalse(report.contains("clipped_frame_count"))
         assertFalse(report.contains("samples=["))
         assertFalse(report.contains("audio_buffer"))
         assertFalse(report.contains("transcript"))
+    }
+
+    private static func snapshot(fill: Int, error: Int, overrun: UInt64) -> HealthSnapshot {
+        var snapshot = HealthSnapshot.cleanRunning
+        snapshot.sharedRingFillFrames = UInt32(clamping: fill)
+        snapshot.sharedRingFillErrorFrames = Int32(clamping: error)
+        snapshot.sharedRingFillErrorAbsFrames = UInt32(error.magnitude)
+        snapshot.sharedRingOverrunFrames = overrun
+        return snapshot
     }
 }
 

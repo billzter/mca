@@ -2,6 +2,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::slice;
 
+// Release builds intentionally use `panic = "abort"`. These FFI wrappers still use
+// `catch_unwind` so debug/test unwind builds fail closed, but release safety relies on
+// validating inputs and keeping the implementation's normal error paths panic-free.
 pub const MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE: u32 = 48_000;
 pub const MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS: u32 = 2;
 
@@ -41,6 +44,10 @@ pub struct MixedAudioEngineHealth {
     pub system_drift_drop_frames: u64,
     pub mic_drift_drop_frames: u64,
     pub callback_error_count: u64,
+    pub shared_ring_fill_frames: u32,
+    pub shared_ring_fill_error_frames: i32,
+    pub shared_ring_fill_error_abs_frames: u32,
+    pub shared_ring_overrun_frames: u64,
 }
 
 #[repr(C)]

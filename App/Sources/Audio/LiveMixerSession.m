@@ -5,6 +5,7 @@
 #import <Foundation/Foundation.h>
 
 #include <pthread.h>
+#include <mach/mach_time.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdatomic.h>
@@ -25,12 +26,29 @@ enum {
     kMCASharedMemoryCapacityFrames = 12000,
     kMCAMaxWriteFrames = 2400,
     kMCAMaxTapScratchFrames = 4096,
-    kMCAProgramGraphFadeFrames = 480
+    kMCAProgramGraphFadeFrames = 480,
+    kMCASourceQueueCapacityFrames = 48000,
+    kMCAMixerTickFrames = 512,
+    kMCAMixerIdleMicros = 1000
 };
+
+typedef struct MCAAudioFrameQueue {
+    atomic_uint_fast64_t readFrameIndex;
+    atomic_uint_fast64_t writeFrameIndex;
+    atomic_uint_fast64_t droppedFrameCount;
+    UInt32 capacityFrames;
+    UInt32 channelCount;
+    float *samples;
+} MCAAudioFrameQueue;
 
 typedef struct MCALiveMixerContext {
     pthread_mutex_t mutex;
     atomic_bool micStopping;
+    atomic_bool mixerActive;
+    atomic_bool mixerThreadStarted;
+    atomic_bool resetSourcesRequested;
+    atomic_uint_fast32_t bridgeSilenceFramesRequested;
+    atomic_uint_fast32_t graphFadeInFramesRemaining;
     bool running;
     AudioObjectID tapID;
     AudioObjectID aggregateID;
@@ -40,7 +58,14 @@ typedef struct MCALiveMixerContext {
     AudioStreamBasicDescription tapFormat;
     AudioStreamBasicDescription micFormat;
     MixedAudioSessionHandle *session;
-    UInt32 graphFadeInFramesRemaining;
+    MixedAudioEngineHealth cachedHealth;
+    pthread_t mixerThread;
+    MCAAudioFrameQueue systemQueue;
+    MCAAudioFrameQueue micQueueFrames;
+    float systemQueueStorage[kMCASourceQueueCapacityFrames * kMCAOutputChannels];
+    float micQueueStorage[kMCASourceQueueCapacityFrames];
+    float mixerSystemScratch[kMCAMixerTickFrames * kMCAOutputChannels];
+    float mixerMicScratch[kMCAMixerTickFrames];
     float tapScratch[kMCAMaxTapScratchFrames * kMCAOutputChannels];
 } MCALiveMixerContext;
 
@@ -56,7 +81,11 @@ enum {
     kMCALiveMixerHealthSystemDriftDropFrames = 8,
     kMCALiveMixerHealthMicDriftDropFrames = 9,
     kMCALiveMixerHealthCallbackErrorCount = 10,
-    kMCALiveMixerHealthCounterCount = 11
+    kMCALiveMixerHealthSharedRingFillFrames = 11,
+    kMCALiveMixerHealthSharedRingFillErrorFrames = 12,
+    kMCALiveMixerHealthSharedRingFillErrorAbsFrames = 13,
+    kMCALiveMixerHealthSharedRingOverrunFrames = 14,
+    kMCALiveMixerHealthCounterCount = 15
 };
 
 static uint64_t MCASignedInt32Bits(int32_t value)
@@ -68,10 +97,154 @@ static MCALiveMixerContext gMixer;
 static pthread_once_t gMixerOnce = PTHREAD_ONCE_INIT;
 static const char *kMCANoMicrophoneUID = "__MCA_NO_MIC__";
 
+static void *MCAMixerOwnerThreadMain(void *userData);
+
+static uint64_t MCAMachTicksForAudioFrames(UInt32 frames)
+{
+    mach_timebase_info_data_t timebase;
+    mach_timebase_info(&timebase);
+
+    uint64_t nanos = ((uint64_t)frames * 1000000000ULL) / kMCAOutputSampleRate;
+    return (nanos * timebase.denom) / timebase.numer;
+}
+
+static void MCAAudioFrameQueueConfigure(MCAAudioFrameQueue *queue,
+                                        float *storage,
+                                        UInt32 capacityFrames,
+                                        UInt32 channelCount)
+{
+    atomic_init(&queue->readFrameIndex, 0);
+    atomic_init(&queue->writeFrameIndex, 0);
+    atomic_init(&queue->droppedFrameCount, 0);
+    queue->capacityFrames = capacityFrames;
+    queue->channelCount = channelCount;
+    queue->samples = storage;
+}
+
+static void MCAAudioFrameQueueReset(MCAAudioFrameQueue *queue)
+{
+    uint_fast64_t writeIndex = atomic_load_explicit(&queue->writeFrameIndex,
+                                                   memory_order_acquire);
+    atomic_store_explicit(&queue->readFrameIndex, writeIndex, memory_order_release);
+}
+
+static UInt32 MCAAudioFrameQueuePush(MCAAudioFrameQueue *queue,
+                                     const float *samples,
+                                     UInt32 frames)
+{
+    if (queue == NULL || queue->samples == NULL || samples == NULL || frames == 0) {
+        return 0;
+    }
+
+    UInt32 framesToWrite = frames;
+    if (framesToWrite > queue->capacityFrames) {
+        UInt32 droppedFrames = framesToWrite - queue->capacityFrames;
+        atomic_fetch_add_explicit(&queue->droppedFrameCount,
+                                  droppedFrames,
+                                  memory_order_relaxed);
+        framesToWrite = queue->capacityFrames;
+    }
+
+    uint_fast64_t readIndex = atomic_load_explicit(&queue->readFrameIndex,
+                                                  memory_order_acquire);
+    uint_fast64_t writeIndex = atomic_load_explicit(&queue->writeFrameIndex,
+                                                   memory_order_relaxed);
+    uint_fast64_t queuedFrames = writeIndex - readIndex;
+    if (queuedFrames >= queue->capacityFrames) {
+        atomic_fetch_add_explicit(&queue->droppedFrameCount,
+                                  framesToWrite,
+                                  memory_order_relaxed);
+        return 0;
+    }
+
+    UInt32 availableFrames = queue->capacityFrames - (UInt32)queuedFrames;
+    if (framesToWrite > availableFrames) {
+        UInt32 droppedFrames = framesToWrite - availableFrames;
+        atomic_fetch_add_explicit(&queue->droppedFrameCount,
+                                  droppedFrames,
+                                  memory_order_relaxed);
+        framesToWrite = availableFrames;
+    }
+    if (framesToWrite == 0) {
+        return 0;
+    }
+
+    UInt32 channelCount = queue->channelCount;
+    UInt32 startFrame = (UInt32)(writeIndex % queue->capacityFrames);
+    UInt32 firstFrames = queue->capacityFrames - startFrame;
+    if (firstFrames > framesToWrite) {
+        firstFrames = framesToWrite;
+    }
+    memcpy(&queue->samples[(size_t)startFrame * channelCount],
+           samples,
+           sizeof(float) * firstFrames * channelCount);
+
+    UInt32 remainingFrames = framesToWrite - firstFrames;
+    if (remainingFrames > 0) {
+        memcpy(queue->samples,
+               &samples[(size_t)firstFrames * channelCount],
+               sizeof(float) * remainingFrames * channelCount);
+    }
+
+    atomic_store_explicit(&queue->writeFrameIndex,
+                          writeIndex + framesToWrite,
+                          memory_order_release);
+    return framesToWrite;
+}
+
+static UInt32 MCAAudioFrameQueuePop(MCAAudioFrameQueue *queue,
+                                    float *outSamples,
+                                    UInt32 maxFrames)
+{
+    if (queue == NULL || queue->samples == NULL || outSamples == NULL || maxFrames == 0) {
+        return 0;
+    }
+
+    uint_fast64_t readIndex = atomic_load_explicit(&queue->readFrameIndex,
+                                                  memory_order_relaxed);
+    uint_fast64_t writeIndex = atomic_load_explicit(&queue->writeFrameIndex,
+                                                   memory_order_acquire);
+    uint_fast64_t queuedFrames = writeIndex - readIndex;
+    if (queuedFrames == 0) {
+        return 0;
+    }
+
+    UInt32 framesToRead = queuedFrames > maxFrames ? maxFrames : (UInt32)queuedFrames;
+    UInt32 channelCount = queue->channelCount;
+    UInt32 startFrame = (UInt32)(readIndex % queue->capacityFrames);
+    UInt32 firstFrames = queue->capacityFrames - startFrame;
+    if (firstFrames > framesToRead) {
+        firstFrames = framesToRead;
+    }
+    memcpy(outSamples,
+           &queue->samples[(size_t)startFrame * channelCount],
+           sizeof(float) * firstFrames * channelCount);
+
+    UInt32 remainingFrames = framesToRead - firstFrames;
+    if (remainingFrames > 0) {
+        memcpy(&outSamples[(size_t)firstFrames * channelCount],
+               queue->samples,
+               sizeof(float) * remainingFrames * channelCount);
+    }
+
+    atomic_store_explicit(&queue->readFrameIndex,
+                          readIndex + framesToRead,
+                          memory_order_release);
+    return framesToRead;
+}
+
 static void MCAInitMixer(void)
 {
     memset(&gMixer, 0, sizeof(gMixer));
     pthread_mutex_init(&gMixer.mutex, NULL);
+    MCAAudioFrameQueueConfigure(&gMixer.systemQueue,
+                                gMixer.systemQueueStorage,
+                                kMCASourceQueueCapacityFrames,
+                                kMCAOutputChannels);
+    MCAAudioFrameQueueConfigure(&gMixer.micQueueFrames,
+                                gMixer.micQueueStorage,
+                                kMCASourceQueueCapacityFrames,
+                                1);
     gMixer.tapID = kAudioObjectUnknown;
     gMixer.aggregateID = kAudioObjectUnknown;
 }
@@ -282,7 +455,7 @@ static bool MCASetAggregateTapList(AudioObjectID aggregateID, NSString *tapUID)
     return status == noErr;
 }
 
-static bool MCACreateRustSession(MCALiveMixerContext *context)
+static MixedAudioSessionHandle *MCACreateRustSession(void)
 {
     MixedAudioSessionConfig config;
     memset(&config, 0, sizeof(config));
@@ -294,111 +467,285 @@ static bool MCACreateRustSession(MCALiveMixerContext *context)
     config.shared_memory_capacity_frames = kMCASharedMemoryCapacityFrames;
     config.max_write_frames = kMCAMaxWriteFrames;
 
-    context->session = mixed_audio_session_create(config);
-    return context->session != NULL;
+    return mixed_audio_session_create(config);
 }
 
 static bool MCAEnsureRustSession(MCALiveMixerContext *context)
 {
-    if (context->session != NULL) {
-        return true;
-    }
-    return MCACreateRustSession(context);
-}
-
-static void MCAResetRustSources(MCALiveMixerContext *context)
-{
     pthread_mutex_lock(&context->mutex);
     if (context->session != NULL) {
-        (void)mixed_audio_session_reset_sources(context->session);
+        pthread_mutex_unlock(&context->mutex);
+        return true;
     }
-    context->graphFadeInFramesRemaining = 0;
     pthread_mutex_unlock(&context->mutex);
+
+    MixedAudioSessionHandle *session = MCACreateRustSession();
+    if (session == NULL) {
+        return false;
+    }
+
+    bool didPublishSession = false;
+    pthread_mutex_lock(&context->mutex);
+    if (context->session == NULL) {
+        context->session = session;
+        memset(&context->cachedHealth, 0, sizeof(context->cachedHealth));
+        atomic_store_explicit(&context->systemQueue.droppedFrameCount, 0, memory_order_release);
+        atomic_store_explicit(&context->micQueueFrames.droppedFrameCount, 0, memory_order_release);
+        didPublishSession = true;
+    }
+    pthread_mutex_unlock(&context->mutex);
+
+    if (!didPublishSession) {
+        mixed_audio_session_destroy(session);
+    }
+    return true;
+}
+
+static bool MCAEnsureMixerOwnerThread(MCALiveMixerContext *context)
+{
+    if (atomic_load_explicit(&context->mixerThreadStarted, memory_order_acquire)) {
+        return true;
+    }
+
+    pthread_mutex_lock(&context->mutex);
+    if (atomic_load_explicit(&context->mixerThreadStarted, memory_order_relaxed)) {
+        pthread_mutex_unlock(&context->mutex);
+        return true;
+    }
+
+    int status = pthread_create(&context->mixerThread,
+                                NULL,
+                                MCAMixerOwnerThreadMain,
+                                context);
+    if (status != 0) {
+        pthread_mutex_unlock(&context->mutex);
+        return false;
+    }
+    pthread_detach(context->mixerThread);
+    atomic_store_explicit(&context->mixerThreadStarted, true, memory_order_release);
+    pthread_mutex_unlock(&context->mutex);
+    return true;
+}
+
+static void MCARequestRustSourceReset(MCALiveMixerContext *context)
+{
+    atomic_store_explicit(&context->graphFadeInFramesRemaining, 0, memory_order_release);
+    atomic_store_explicit(&context->resetSourcesRequested, true, memory_order_release);
+}
+
+static void MCAResetSourceQueuesOnMixerOwner(MCALiveMixerContext *context)
+{
+    MCAAudioFrameQueueReset(&context->systemQueue);
+    MCAAudioFrameQueueReset(&context->micQueueFrames);
 }
 
 static void MCAArmProgramGraphFadeIn(MCALiveMixerContext *context)
 {
-    pthread_mutex_lock(&context->mutex);
-    context->graphFadeInFramesRemaining = kMCAProgramGraphFadeFrames;
-    pthread_mutex_unlock(&context->mutex);
+    atomic_store_explicit(&context->graphFadeInFramesRemaining,
+                          kMCAProgramGraphFadeFrames,
+                          memory_order_release);
 }
 
 static void MCAApplyProgramGraphFadeInLocked(MCALiveMixerContext *context,
                                              float *samples,
                                              UInt32 frames)
 {
-    if (context->graphFadeInFramesRemaining == 0 || samples == NULL || frames == 0) {
+    uint_fast32_t remaining = atomic_load_explicit(&context->graphFadeInFramesRemaining,
+                                                  memory_order_acquire);
+    if (remaining == 0 || samples == NULL || frames == 0) {
         return;
     }
 
-    UInt32 fadeFrames = context->graphFadeInFramesRemaining < frames
-                            ? context->graphFadeInFramesRemaining
-                            : frames;
-    UInt32 fadeCompleted = kMCAProgramGraphFadeFrames - context->graphFadeInFramesRemaining;
+    UInt32 fadeFrames = 0;
+    bool claimedFadeFrames = false;
+    while (remaining > 0) {
+        fadeFrames = remaining < frames ? (UInt32)remaining : frames;
+        uint_fast32_t nextRemaining = remaining - fadeFrames;
+        if (atomic_compare_exchange_weak_explicit(&context->graphFadeInFramesRemaining,
+                                                  &remaining,
+                                                  nextRemaining,
+                                                  memory_order_acq_rel,
+                                                  memory_order_acquire)) {
+            claimedFadeFrames = true;
+            break;
+        }
+    }
+    if (!claimedFadeFrames || fadeFrames == 0) {
+        return;
+    }
+
+    UInt32 fadeCompleted = kMCAProgramGraphFadeFrames - (UInt32)remaining;
     for (UInt32 frame = 0; frame < fadeFrames; frame++) {
         float gain = (float)(fadeCompleted + frame + 1) / (float)kMCAProgramGraphFadeFrames;
         samples[(size_t)frame * kMCAOutputChannels] *= gain;
         samples[(size_t)frame * kMCAOutputChannels + 1] *= gain;
     }
-    context->graphFadeInFramesRemaining -= fadeFrames;
 }
 
-static void MCAWriteProgramGraphBridgeSilence(MCALiveMixerContext *context)
+static void MCARequestProgramGraphBridgeSilence(MCALiveMixerContext *context)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    atomic_fetch_add_explicit(&context->bridgeSilenceFramesRequested,
+                              kMCAProgramGraphFadeFrames,
+                              memory_order_acq_rel);
+}
+
+static void MCARefreshCachedHealthLocked(MCALiveMixerContext *context)
 {
     if (context == NULL || context->session == NULL) {
         return;
     }
 
-    float silence[kMCAProgramGraphFadeFrames * kMCAOutputChannels] = { 0 };
-    pthread_mutex_lock(&context->mutex);
-    if (context->running && context->session != NULL) {
-        (void)mixed_audio_session_push_system_interleaved_stereo(context->session,
-                                                                 silence,
-                                                                 kMCAProgramGraphFadeFrames);
-        (void)mixed_audio_session_mix_and_write(context->session, kMCAProgramGraphFadeFrames);
+    MixedAudioEngineHealth health;
+    memset(&health, 0, sizeof(health));
+    if (mixed_audio_session_get_health(context->session, &health) == 0) {
+        health.callback_error_count +=
+            atomic_load_explicit(&context->systemQueue.droppedFrameCount, memory_order_relaxed);
+        health.callback_error_count +=
+            atomic_load_explicit(&context->micQueueFrames.droppedFrameCount, memory_order_relaxed);
+        context->cachedHealth = health;
     }
-    pthread_mutex_unlock(&context->mutex);
 }
 
-static void MCAPushSystemAndWrite(MCALiveMixerContext *context,
-                                  const float *samples,
-                                  UInt32 frames)
+static void MCAMixerOwnerProcessTickLocked(MCALiveMixerContext *context)
 {
-    if (context == NULL || context->session == NULL || samples == NULL || frames == 0) {
+    if (context == NULL) {
         return;
     }
 
-    pthread_mutex_lock(&context->mutex);
-    const float *samplesToPush = samples;
-    if (context->graphFadeInFramesRemaining > 0) {
-        if (frames <= kMCAMaxTapScratchFrames) {
-            if (samples != context->tapScratch) {
-                memcpy(context->tapScratch,
-                       samples,
-                       sizeof(float) * frames * kMCAOutputChannels);
+    uint_fast32_t bridgeFrames = atomic_load_explicit(&context->bridgeSilenceFramesRequested,
+                                                     memory_order_acquire);
+    if (context->session != NULL && bridgeFrames > 0) {
+        UInt32 frames = 0;
+        bool claimedBridgeFrames = false;
+        while (bridgeFrames > 0) {
+            frames = bridgeFrames > kMCAMixerTickFrames
+                         ? kMCAMixerTickFrames
+                         : (UInt32)bridgeFrames;
+            if (atomic_compare_exchange_weak_explicit(&context->bridgeSilenceFramesRequested,
+                                                      &bridgeFrames,
+                                                      bridgeFrames - frames,
+                                                      memory_order_acq_rel,
+                                                      memory_order_acquire)) {
+                claimedBridgeFrames = true;
+                break;
             }
-            MCAApplyProgramGraphFadeInLocked(context, context->tapScratch, frames);
-            samplesToPush = context->tapScratch;
-        } else {
-            context->graphFadeInFramesRemaining = 0;
+        }
+        if (!claimedBridgeFrames || frames == 0) {
+            return;
+        }
+        memset(context->mixerSystemScratch,
+               0,
+               sizeof(float) * frames * kMCAOutputChannels);
+        (void)mixed_audio_session_push_system_interleaved_stereo(context->session,
+                                                                 context->mixerSystemScratch,
+                                                                 frames);
+        (void)mixed_audio_session_mix_and_write(context->session, frames);
+        MCARefreshCachedHealthLocked(context);
+        return;
+    }
+
+    if (atomic_exchange_explicit(&context->resetSourcesRequested,
+                                 false,
+                                 memory_order_acq_rel)) {
+        MCAResetSourceQueuesOnMixerOwner(context);
+        if (context->session != NULL) {
+            (void)mixed_audio_session_reset_sources(context->session);
+            MCARefreshCachedHealthLocked(context);
         }
     }
-    (void)mixed_audio_session_push_system_interleaved_stereo(context->session,
-                                                            samplesToPush,
-                                                            frames);
-    (void)mixed_audio_session_mix_and_write(context->session, frames);
-    pthread_mutex_unlock(&context->mutex);
-}
 
-static void MCAPushMic(MCALiveMixerContext *context, const float *samples, UInt32 frames)
-{
-    if (context == NULL || context->session == NULL || samples == NULL || frames == 0) {
+    if (context->session == NULL) {
         return;
     }
 
-    pthread_mutex_lock(&context->mutex);
-    (void)mixed_audio_session_push_mic_mono(context->session, samples, frames);
-    pthread_mutex_unlock(&context->mutex);
+    UInt32 systemFrames = MCAAudioFrameQueuePop(&context->systemQueue,
+                                                context->mixerSystemScratch,
+                                                kMCAMixerTickFrames);
+    if (systemFrames > 0) {
+        MCAApplyProgramGraphFadeInLocked(context, context->mixerSystemScratch, systemFrames);
+        (void)mixed_audio_session_push_system_interleaved_stereo(context->session,
+                                                                 context->mixerSystemScratch,
+                                                                 systemFrames);
+    }
+
+    UInt32 micFrames = MCAAudioFrameQueuePop(&context->micQueueFrames,
+                                             context->mixerMicScratch,
+                                             kMCAMixerTickFrames);
+    if (micFrames > 0) {
+        (void)mixed_audio_session_push_mic_mono(context->session,
+                                                context->mixerMicScratch,
+                                                micFrames);
+    }
+
+    (void)mixed_audio_session_mix_and_write(context->session, kMCAMixerTickFrames);
+    MCARefreshCachedHealthLocked(context);
+}
+
+static void *MCAMixerOwnerThreadMain(void *userData)
+{
+    MCALiveMixerContext *context = (MCALiveMixerContext *)userData;
+    uint64_t tickInterval = MCAMachTicksForAudioFrames(kMCAMixerTickFrames);
+    uint64_t nextTick = mach_absolute_time();
+    while (true) {
+        bool active = atomic_load_explicit(&context->mixerActive, memory_order_acquire);
+        bool hasBridge = atomic_load_explicit(&context->bridgeSilenceFramesRequested,
+                                              memory_order_acquire) > 0;
+        bool hasReset = atomic_load_explicit(&context->resetSourcesRequested,
+                                             memory_order_acquire);
+        if (!active && !hasBridge && !hasReset) {
+            usleep(kMCAMixerIdleMicros);
+            nextTick = mach_absolute_time();
+            continue;
+        }
+
+        uint64_t tickStart = mach_absolute_time();
+        if (tickStart > nextTick + tickInterval) {
+            nextTick = tickStart;
+        }
+
+        pthread_mutex_lock(&context->mutex);
+        MCAMixerOwnerProcessTickLocked(context);
+        pthread_mutex_unlock(&context->mutex);
+
+        nextTick += tickInterval;
+        uint64_t afterTick = mach_absolute_time();
+        if (nextTick > afterTick) {
+            mach_wait_until(nextTick);
+        } else {
+            nextTick = afterTick;
+        }
+    }
+
+    return NULL;
+}
+
+// Realtime callback boundary: these enqueue helpers and the Core Audio callbacks below must
+// only copy into preallocated queues and return. Keep mutexes and mixed_audio_session_* calls
+// on MCAMixerOwnerThreadMain, where blocking control-plane work cannot stall the audio callback.
+static void MCAEnqueueSystemFrames(MCALiveMixerContext *context,
+                                   const float *samples,
+                                   UInt32 frames)
+{
+    if (context == NULL || samples == NULL || frames == 0) {
+        return;
+    }
+
+    (void)MCAAudioFrameQueuePush(&context->systemQueue, samples, frames);
+}
+
+static void MCAEnqueueMicFrames(MCALiveMixerContext *context,
+                                const float *samples,
+                                UInt32 frames)
+{
+    if (context == NULL || samples == NULL || frames == 0) {
+        return;
+    }
+
+    (void)MCAAudioFrameQueuePush(&context->micQueueFrames, samples, frames);
 }
 
 static void MCATapIOProcAppendInterleaved(MCALiveMixerContext *context,
@@ -411,7 +758,7 @@ static void MCATapIOProcAppendInterleaved(MCALiveMixerContext *context,
     }
 
     UInt32 frames = buffer->mDataByteSize / (kMCAOutputChannels * sizeof(float));
-    MCAPushSystemAndWrite(context, (const float *)buffer->mData, frames);
+    MCAEnqueueSystemFrames(context, (const float *)buffer->mData, frames);
 }
 
 static void MCATapIOProcAppendNoninterleaved(MCALiveMixerContext *context,
@@ -434,7 +781,7 @@ static void MCATapIOProcAppendNoninterleaved(MCALiveMixerContext *context,
         context->tapScratch[(size_t)frame * kMCAOutputChannels] = left[frame];
         context->tapScratch[(size_t)frame * kMCAOutputChannels + 1] = right[frame];
     }
-    MCAPushSystemAndWrite(context, context->tapScratch, frames);
+    MCAEnqueueSystemFrames(context, context->tapScratch, frames);
 }
 
 static OSStatus MCATapIOProc(AudioObjectID inDevice,
@@ -491,7 +838,7 @@ static void MCAMicCallback(void *userData,
 
     if (buffer->mAudioData != NULL && buffer->mAudioDataByteSize % sizeof(float) == 0) {
         UInt32 frames = buffer->mAudioDataByteSize / sizeof(float);
-        MCAPushMic(context, (const float *)buffer->mAudioData, frames);
+        MCAEnqueueMicFrames(context, (const float *)buffer->mAudioData, frames);
     }
 
     if (atomic_load(&context->micStopping)) {
@@ -552,9 +899,19 @@ static bool MCAStartMicrophoneQueue(MCALiveMixerContext *context, const char *mi
     return status == noErr;
 }
 
-static void MCAStopSourceGraph(MCALiveMixerContext *context)
+static void MCAStopSourceGraph(MCALiveMixerContext *context, bool shouldBridge)
 {
-    MCAWriteProgramGraphBridgeSilence(context);
+    if (!shouldBridge) {
+        atomic_store_explicit(&context->mixerActive, false, memory_order_release);
+        atomic_store_explicit(&context->bridgeSilenceFramesRequested, 0, memory_order_release);
+    }
+
+    bool wasRunning = false;
+    pthread_mutex_lock(&context->mutex);
+    wasRunning = context->running;
+    context->running = false;
+    pthread_mutex_unlock(&context->mutex);
+
     atomic_store(&context->micStopping, true);
     if (context->aggregateID != kAudioObjectUnknown && context->ioProcID != NULL) {
         (void)AudioDeviceStop(context->aggregateID, context->ioProcID);
@@ -576,29 +933,23 @@ static void MCAStopSourceGraph(MCALiveMixerContext *context)
         (void)AudioHardwareDestroyProcessTap(context->tapID);
         context->tapID = kAudioObjectUnknown;
     }
+    MCARequestRustSourceReset(context);
+    if (shouldBridge && wasRunning) {
+        MCARequestProgramGraphBridgeSilence(context);
+    }
     pthread_mutex_lock(&context->mutex);
     memset(context->micBuffers, 0, sizeof(context->micBuffers));
     memset(&context->tapFormat, 0, sizeof(context->tapFormat));
     memset(&context->micFormat, 0, sizeof(context->micFormat));
-    context->graphFadeInFramesRemaining = 0;
-    context->running = false;
-    pthread_mutex_unlock(&context->mutex);
-}
-
-static void MCADestroyRustSession(MCALiveMixerContext *context)
-{
-    pthread_mutex_lock(&context->mutex);
-    if (context->session != NULL) {
-        mixed_audio_session_destroy(context->session);
-        context->session = NULL;
-    }
     pthread_mutex_unlock(&context->mutex);
 }
 
 static void MCACleanup(MCALiveMixerContext *context)
 {
-    MCAStopSourceGraph(context);
-    MCADestroyRustSession(context);
+    atomic_store_explicit(&context->mixerActive, false, memory_order_release);
+    atomic_store_explicit(&context->bridgeSilenceFramesRequested, 0, memory_order_release);
+    atomic_store_explicit(&context->resetSourcesRequested, false, memory_order_release);
+    MCAStopSourceGraph(context, false);
 }
 
 int32_t MCA_LiveMixerStart(const char *microphoneUID,
@@ -607,13 +958,18 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID,
 {
     pthread_once(&gMixerOnce, MCAInitMixer);
 
-    MCAStopSourceGraph(&gMixer);
+    if (!MCAEnsureMixerOwnerThread(&gMixer)) {
+        return -9;
+    }
+
+    MCAStopSourceGraph(&gMixer, true);
     if (!MCAEnsureRustSession(&gMixer)) {
         return -6;
     }
-    MCAResetRustSources(&gMixer);
+    MCARequestRustSourceReset(&gMixer);
 
     atomic_store(&gMixer.micStopping, false);
+    atomic_store_explicit(&gMixer.mixerActive, true, memory_order_release);
 
     @autoreleasepool {
         AudioObjectID ownProcessObject = MCACopyCurrentProcessObject();
@@ -642,7 +998,7 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID,
 
         OSStatus status = AudioHardwareCreateProcessTap(tapDescription, &gMixer.tapID);
         if (status != noErr || gMixer.tapID == kAudioObjectUnknown) {
-            MCAStopSourceGraph(&gMixer);
+            MCAStopSourceGraph(&gMixer, false);
             return -1;
         }
 
@@ -659,18 +1015,18 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID,
         status = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)aggregateDescription,
                                                     &gMixer.aggregateID);
         if (status != noErr || gMixer.aggregateID == kAudioObjectUnknown) {
-            MCAStopSourceGraph(&gMixer);
+            MCAStopSourceGraph(&gMixer, false);
             return -2;
         }
 
         if (!MCASetAggregateTapList(gMixer.aggregateID, tapUID)) {
-            MCAStopSourceGraph(&gMixer);
+            MCAStopSourceGraph(&gMixer, false);
             return -3;
         }
 
         usleep(kMCAAggregateTapSettleMicros);
         if (!MCACopyAggregateInputFormat(gMixer.aggregateID, &gMixer.tapFormat)) {
-            MCAStopSourceGraph(&gMixer);
+            MCAStopSourceGraph(&gMixer, false);
             return -4;
         }
 
@@ -679,7 +1035,7 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID,
                                            &gMixer,
                                            &gMixer.ioProcID);
         if (status != noErr) {
-            MCAStopSourceGraph(&gMixer);
+            MCAStopSourceGraph(&gMixer, false);
             return -5;
         }
 
@@ -687,7 +1043,7 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID,
             microphoneUID == NULL || strcmp(microphoneUID, kMCANoMicrophoneUID) != 0;
         if (shouldStartMicrophone) {
             if (!MCAStartMicrophoneQueue(&gMixer, microphoneUID)) {
-                MCAStopSourceGraph(&gMixer);
+                MCAStopSourceGraph(&gMixer, false);
                 return -7;
             }
         }
@@ -695,7 +1051,7 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID,
         MCAArmProgramGraphFadeIn(&gMixer);
         status = AudioDeviceStart(gMixer.aggregateID, gMixer.ioProcID);
         if (status != noErr) {
-            MCAStopSourceGraph(&gMixer);
+            MCAStopSourceGraph(&gMixer, false);
             return -8;
         }
 
@@ -709,6 +1065,8 @@ int32_t MCA_LiveMixerStart(const char *microphoneUID,
 void MCA_LiveMixerStop(void)
 {
     pthread_once(&gMixerOnce, MCAInitMixer);
+    // Stop means "no active source graph" during setup/mode changes. Keep the Rust session and
+    // shared-memory object alive so existing HAL clients do not stay mapped to an unlinked object.
     MCACleanup(&gMixer);
 }
 
@@ -740,13 +1098,8 @@ int32_t MCA_LiveMixerCopyHealthCounters(uint64_t *outCounters, uint32_t counterC
         return -3;
     }
 
-    MixedAudioEngineHealth health;
-    memset(&health, 0, sizeof(health));
-    int32_t status = mixed_audio_session_get_health(gMixer.session, &health);
+    MixedAudioEngineHealth health = gMixer.cachedHealth;
     pthread_mutex_unlock(&gMixer.mutex);
-    if (status != 0) {
-        return status;
-    }
 
     outCounters[kMCALiveMixerHealthFramesMixed] = health.frames_mixed;
     outCounters[kMCALiveMixerHealthSystemUnderrunFrames] = health.system_underrun_frames;
@@ -759,5 +1112,12 @@ int32_t MCA_LiveMixerCopyHealthCounters(uint64_t *outCounters, uint32_t counterC
     outCounters[kMCALiveMixerHealthSystemDriftDropFrames] = health.system_drift_drop_frames;
     outCounters[kMCALiveMixerHealthMicDriftDropFrames] = health.mic_drift_drop_frames;
     outCounters[kMCALiveMixerHealthCallbackErrorCount] = health.callback_error_count;
+    outCounters[kMCALiveMixerHealthSharedRingFillFrames] = health.shared_ring_fill_frames;
+    outCounters[kMCALiveMixerHealthSharedRingFillErrorFrames] =
+        MCASignedInt32Bits(health.shared_ring_fill_error_frames);
+    outCounters[kMCALiveMixerHealthSharedRingFillErrorAbsFrames] =
+        health.shared_ring_fill_error_abs_frames;
+    outCounters[kMCALiveMixerHealthSharedRingOverrunFrames] =
+        health.shared_ring_overrun_frames;
     return 0;
 }

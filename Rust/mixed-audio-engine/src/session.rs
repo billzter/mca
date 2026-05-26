@@ -1,5 +1,6 @@
 use crate::shared_memory::{
-    now_nanos, PosixSharedMemoryWriter, SharedMemoryAudioWriter, MIXED_AUDIO_SHM_NAME,
+    now_nanos, PosixSharedMemoryWriter, SharedMemoryAudioWriter, SharedRingWriteStatus,
+    MIXED_AUDIO_SHM_NAME,
 };
 use crate::{
     Engine, EngineError, MixedAudioEngineConfig, MixedAudioEngineHealth,
@@ -9,6 +10,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::slice;
 
+// Release builds intentionally use `panic = "abort"`. The C ABI guards below catch
+// unwinds in debug/test builds, but production resilience comes from rejecting invalid
+// inputs before unsafe access and keeping normal session operations panic-free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionError {
     Engine(EngineError),
@@ -47,6 +51,7 @@ pub struct MixedAudioSession<W: SharedMemoryAudioWriter> {
     mix_buffer: Vec<f32>,
     frame_index: u64,
     generation: u64,
+    shared_ring_status: SharedRingWriteStatus,
 }
 
 impl<W: SharedMemoryAudioWriter> MixedAudioSession<W> {
@@ -68,6 +73,7 @@ impl<W: SharedMemoryAudioWriter> MixedAudioSession<W> {
             ],
             frame_index: 0,
             generation: 1,
+            shared_ring_status: SharedRingWriteStatus::default(),
         })
     }
 
@@ -97,7 +103,7 @@ impl<W: SharedMemoryAudioWriter> MixedAudioSession<W> {
             .mix_available(requested_frames, &mut self.mix_buffer[..required_samples])?;
         let mixed_samples = mixed_frames as usize * MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS as usize;
         let health = self.engine.health();
-        self.writer.write_audio_frames(
+        self.shared_ring_status = self.writer.write_audio_frames(
             self.frame_index,
             &self.mix_buffer[..mixed_samples],
             self.generation,
@@ -113,7 +119,12 @@ impl<W: SharedMemoryAudioWriter> MixedAudioSession<W> {
     }
 
     pub fn health(&self) -> MixedAudioEngineHealth {
-        self.engine.health()
+        let mut health = self.engine.health();
+        health.shared_ring_fill_frames = self.shared_ring_status.fill_frames;
+        health.shared_ring_fill_error_frames = self.shared_ring_status.fill_error_frames;
+        health.shared_ring_fill_error_abs_frames = self.shared_ring_status.fill_error_abs_frames;
+        health.shared_ring_overrun_frames = self.shared_ring_status.overrun_count;
+        health
     }
 
     pub fn reset_sources(&mut self) {

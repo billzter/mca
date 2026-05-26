@@ -18,6 +18,213 @@ struct HealthSnapshot: Equatable {
     var systemDriftDropFrames: UInt64
     var micDriftDropFrames: UInt64
     var callbackErrorCount: UInt64
+    var sharedRingFillFrames: UInt32 = 0
+    var sharedRingFillErrorFrames: Int32 = 0
+    var sharedRingFillErrorAbsFrames: UInt32 = 0
+    var sharedRingOverrunFrames: UInt64 = 0
+}
+
+enum SharedRingStabilityStatus: String, Equatable {
+    case noRecorder = "No Recorder"
+    case warmingUp = "Warming Up"
+    case stable = "Stable"
+    case watch = "Watch"
+    case overrun = "Overrun"
+    case waitingForRecorder = "Waiting for Recorder"
+    case recorderActive = "Recorder Active"
+}
+
+struct SharedRingStats: Equatable {
+    static let targetFillFrames: UInt32 = 2_400
+    static let empty = SharedRingStats(
+        sampleCount: 0,
+        status: .warmingUp,
+        currentFillFrames: 0,
+        currentErrorFrames: 0,
+        minErrorFrames: 0,
+        maxErrorFrames: 0,
+        meanErrorFrames: 0,
+        maxAbsErrorFrames: 0,
+        p95AbsErrorFrames: 0,
+        p99AbsErrorFrames: 0,
+        overrunFrames: 0
+    )
+
+    var sampleCount: Int
+    var status: SharedRingStabilityStatus
+    var currentFillFrames: UInt32
+    var currentErrorFrames: Int32
+    var minErrorFrames: Int32
+    var maxErrorFrames: Int32
+    var meanErrorFrames: Double
+    var maxAbsErrorFrames: UInt32
+    var p95AbsErrorFrames: UInt32
+    var p99AbsErrorFrames: UInt32
+    var overrunFrames: UInt64
+
+    var compactValue: String {
+        if status == .noRecorder || status == .waitingForRecorder || status == .recorderActive {
+            return "\(status.rawValue)   fill \(Self.msString(currentFillFrames))"
+        }
+        return "\(status.rawValue)   p99 \(Self.msString(p99AbsErrorFrames))   max \(Self.msString(maxAbsErrorFrames))   overruns \(overrunFrames)"
+    }
+
+    var currentFillValue: String {
+        "\(currentFillFrames) frames / \(Self.msString(currentFillFrames))"
+    }
+
+    var currentErrorValue: String {
+        "\(currentErrorFrames) frames / \(Self.signedMsString(currentErrorFrames))"
+    }
+
+    static func msString(_ frames: UInt32) -> String {
+        String(format: "%.1f ms", Double(frames) / 48.0)
+    }
+
+    static func signedMsString(_ frames: Int32) -> String {
+        let milliseconds = Double(frames) / 48.0
+        return String(format: "%+.1f ms", milliseconds)
+    }
+}
+
+struct SharedRingStatsAccumulator {
+    private let maxSamples: Int
+    private let warmupSamples: Int
+    private var seenSamples = 0
+    private var fillErrors: [Int32] = []
+    private var overrunSamples: [UInt64] = []
+    private var currentFillFrames: UInt32 = 0
+    private var currentErrorFrames: Int32 = 0
+    private var latestOverrunFrames: UInt64 = 0
+
+    private(set) var summary: SharedRingStats = .empty
+
+    init(maxSamples: Int = 600, warmupSamples: Int = 5) {
+        self.maxSamples = max(1, maxSamples)
+        self.warmupSamples = max(0, warmupSamples)
+    }
+
+    mutating func record(snapshot: HealthSnapshot, recorderActive: Bool = false) {
+        if !recorderActive {
+            resetForNoRecorder(snapshot: snapshot)
+            return
+        }
+
+        seenSamples += 1
+        guard seenSamples > warmupSamples else {
+            summary = .empty
+            return
+        }
+
+        currentFillFrames = snapshot.sharedRingFillFrames
+        currentErrorFrames = snapshot.sharedRingFillErrorFrames
+        latestOverrunFrames = snapshot.sharedRingOverrunFrames
+
+        fillErrors.append(snapshot.sharedRingFillErrorFrames)
+        overrunSamples.append(snapshot.sharedRingOverrunFrames)
+        if fillErrors.count > maxSamples {
+            fillErrors.removeFirst(fillErrors.count - maxSamples)
+            overrunSamples.removeFirst(overrunSamples.count - maxSamples)
+        }
+        recomputeSummary(recorderActive: recorderActive)
+    }
+
+    mutating func reset() {
+        seenSamples = 0
+        fillErrors.removeAll(keepingCapacity: true)
+        overrunSamples.removeAll(keepingCapacity: true)
+        currentFillFrames = 0
+        currentErrorFrames = 0
+        latestOverrunFrames = 0
+        summary = .empty
+    }
+
+    private mutating func resetForNoRecorder(snapshot: HealthSnapshot) {
+        seenSamples = 0
+        fillErrors.removeAll(keepingCapacity: true)
+        overrunSamples.removeAll(keepingCapacity: true)
+        currentFillFrames = snapshot.sharedRingFillFrames
+        currentErrorFrames = snapshot.sharedRingFillErrorFrames
+        latestOverrunFrames = snapshot.sharedRingOverrunFrames
+        summary = SharedRingStats(
+            sampleCount: 0,
+            status: .noRecorder,
+            currentFillFrames: currentFillFrames,
+            currentErrorFrames: currentErrorFrames,
+            minErrorFrames: 0,
+            maxErrorFrames: 0,
+            meanErrorFrames: 0,
+            maxAbsErrorFrames: 0,
+            p95AbsErrorFrames: 0,
+            p99AbsErrorFrames: 0,
+            overrunFrames: 0
+        )
+    }
+
+    private mutating func recomputeSummary(recorderActive: Bool) {
+        guard !fillErrors.isEmpty else {
+            summary = .empty
+            return
+        }
+
+        var minError = Int32.max
+        var maxError = Int32.min
+        var sum = 0
+        var absoluteErrors: [UInt32] = []
+        absoluteErrors.reserveCapacity(fillErrors.count)
+        for error in fillErrors {
+            minError = min(minError, error)
+            maxError = max(maxError, error)
+            sum += Int(error)
+            absoluteErrors.append(UInt32(error.magnitude))
+        }
+        absoluteErrors.sort()
+
+        let p95 = percentileNearestRank(absoluteErrors, percentile: 95)
+        let p99 = percentileNearestRank(absoluteErrors, percentile: 99)
+        let maxAbs = absoluteErrors.last ?? 0
+        let overrunDelta = latestOverrunFrames.saturatingSubtract(overrunSamples.first ?? latestOverrunFrames)
+        let status: SharedRingStabilityStatus
+        if overrunDelta > 0 && recorderActive && maxAbs >= 9_600 {
+            status = .recorderActive
+        } else if overrunDelta > 0 && maxAbs > 48_000 {
+            status = .waitingForRecorder
+        } else if overrunDelta > 0 {
+            status = .overrun
+        } else if p99 > 240 || maxAbs > 480 {
+            status = .watch
+        } else {
+            status = .stable
+        }
+
+        summary = SharedRingStats(
+            sampleCount: fillErrors.count,
+            status: status,
+            currentFillFrames: currentFillFrames,
+            currentErrorFrames: currentErrorFrames,
+            minErrorFrames: minError,
+            maxErrorFrames: maxError,
+            meanErrorFrames: Double(sum) / Double(fillErrors.count),
+            maxAbsErrorFrames: maxAbs,
+            p95AbsErrorFrames: p95,
+            p99AbsErrorFrames: p99,
+            overrunFrames: overrunDelta
+        )
+    }
+}
+
+private func percentileNearestRank(_ sortedValues: [UInt32], percentile: Int) -> UInt32 {
+    guard !sortedValues.isEmpty else {
+        return 0
+    }
+    let rank = max(1, (sortedValues.count * percentile + 99) / 100)
+    return sortedValues[min(rank - 1, sortedValues.count - 1)]
+}
+
+private extension UInt64 {
+    func saturatingSubtract(_ other: UInt64) -> UInt64 {
+        self >= other ? self - other : 0
+    }
 }
 
 struct DiagnosticTerm: Equatable, Identifiable {
@@ -113,6 +320,32 @@ struct HealthDiagnosticSummary: Equatable {
 
         diagnosticsOnlyTerms.append(
             DiagnosticTerm(
+                id: "shared_ring_fill",
+                name: "Shared Ring Fill",
+                value: "fill=\(snapshot.sharedRingFillFrames), error=\(snapshot.sharedRingFillErrorFrames)",
+                explanation: "Producer-to-HAL shared-ring fill relative to the fixed target latency.",
+                visibility: .diagnosticsOnly
+            )
+        )
+
+        let waitingForRecorder = snapshot.sharedRingOverrunFrames > 0 &&
+            snapshot.sharedRingFillErrorAbsFrames > 48_000
+
+        if snapshot.sharedRingOverrunFrames > 0 && !waitingForRecorder {
+            userVisibleFindings.append(
+                DiagnosticTerm(
+                    id: "shared_ring_overrun_frames",
+                    name: "Shared Ring Overrun",
+                    value: "\(snapshot.sharedRingOverrunFrames)",
+                    explanation: "The producer lapped the HAL reader and overwrote unread shared-ring frames.",
+                    visibility: .userVisible
+                )
+            )
+            recommendedActions.append("Keep recording if this was brief; restart the app if shared-ring overruns repeat.")
+        }
+
+        diagnosticsOnlyTerms.append(
+            DiagnosticTerm(
                 id: "queue_frames",
                 name: "Queued Frames",
                 value: "system=\(snapshot.systemQueueFrames), mic=\(snapshot.micQueueFrames)",
@@ -139,7 +372,8 @@ struct HealthDiagnosticSummary: Equatable {
             severity = .failed
         } else if snapshot.systemUnderrunFrames > 0 ||
             snapshot.micUnderrunFrames > 0 ||
-            snapshot.clippedSamples > 0
+            snapshot.clippedSamples > 0 ||
+            (snapshot.sharedRingOverrunFrames > 0 && !waitingForRecorder)
         {
             severity = .degraded
         } else {
@@ -170,6 +404,10 @@ struct HealthDiagnosticSummary: Equatable {
             "system_drift_drop_frames=\(snapshot.systemDriftDropFrames)",
             "mic_drift_drop_frames=\(snapshot.micDriftDropFrames)",
             "callback_error_count=\(snapshot.callbackErrorCount)",
+            "shared_ring_fill_frames=\(snapshot.sharedRingFillFrames)",
+            "shared_ring_fill_error_frames=\(snapshot.sharedRingFillErrorFrames)",
+            "shared_ring_fill_error_abs_frames=\(snapshot.sharedRingFillErrorAbsFrames)",
+            "shared_ring_overrun_frames=\(snapshot.sharedRingOverrunFrames)",
         ]
         return (["severity=\(severity.rawValue)"] + counterLines + termLines).joined(separator: "\n")
     }
