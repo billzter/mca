@@ -78,30 +78,34 @@ crate-type = ["staticlib"]
 Expose only C-compatible functions:
 
 ```c
-mixed_audio_engine_t *mixed_audio_engine_create(const mixed_audio_config_t *config);
-void mixed_audio_engine_destroy(mixed_audio_engine_t *engine);
+MixedAudioEngineHandle *mixed_audio_engine_create(MixedAudioEngineConfig config);
+void mixed_audio_engine_destroy(MixedAudioEngineHandle *handle);
 
-int mixed_audio_engine_start(mixed_audio_engine_t *engine);
-void mixed_audio_engine_stop(mixed_audio_engine_t *engine);
+uint32_t mixed_audio_engine_push_system_interleaved_stereo(
+    MixedAudioEngineHandle *handle,
+    const float *samples,
+    uint32_t frames);
 
-mixed_audio_result_t mixed_audio_engine_push_system_audio(
-    mixed_audio_engine_t *engine,
-    const float *interleaved,
-    uint32_t frame_count,
-    const mixed_audio_source_format_t *format,
-    const mixed_audio_source_timing_t *timing
-);
+uint32_t mixed_audio_engine_push_mic_mono(
+    MixedAudioEngineHandle *handle,
+    const float *samples,
+    uint32_t frames);
 
-mixed_audio_result_t mixed_audio_engine_push_mic_audio(
-    mixed_audio_engine_t *engine,
-    const float *interleaved,
-    uint32_t frame_count,
-    const mixed_audio_source_format_t *format,
-    const mixed_audio_source_timing_t *timing
-);
+uint32_t mixed_audio_engine_mix_available(
+    MixedAudioEngineHandle *handle,
+    float *output,
+    uint32_t frames);
 
-mixed_audio_result_t mixed_audio_engine_mix_available(mixed_audio_engine_t *engine);
-mixed_audio_health_t mixed_audio_engine_health(mixed_audio_engine_t *engine);
+int32_t mixed_audio_engine_get_health(
+    const MixedAudioEngineHandle *handle,
+    MixedAudioEngineHealth *out_health);
+
+MixedAudioSessionHandle *mixed_audio_session_create(MixedAudioSessionConfig config);
+void mixed_audio_session_destroy(MixedAudioSessionHandle *handle);
+
+int32_t mixed_audio_session_get_health(
+    const MixedAudioSessionHandle *handle,
+    MixedAudioEngineHealth *out_health);
 ```
 
 Add a separate C-compatible shared-memory contract for the app-to-HAL boundary:
@@ -148,8 +152,9 @@ Rust FFI rules:
 
 - Callback-facing Rust FFI functions are copy-only, bounded, non-blocking, allocation-free, and panic-free.
 - Use `#[repr(C)]` for all structs crossing language boundaries.
-- Never let Rust panics cross FFI.
-- Prefer `panic = "abort"` for release builds.
+- Release builds use `panic = "abort"`; an internal Rust panic is a fatal process bug, not a recoverable FFI error.
+- Keep release panic paths nearly impossible by validating null pointers, invalid configs, oversized requests, and buffer shapes before unsafe access.
+- `catch_unwind` guards may still fail closed in debug/test unwind builds, but release correctness must not depend on unwind catching.
 - Keep ownership explicit: create/destroy functions own engine lifetime.
 - Pass audio buffers as raw pointers plus frame counts.
 - Return integer error codes at FFI boundaries.

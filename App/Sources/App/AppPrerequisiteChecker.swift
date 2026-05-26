@@ -211,6 +211,7 @@ struct CoreAudioDeviceInfo: Equatable {
     var name: String?
     var modelUID: String? = nil
     var compatibility: DriverCompatibilityMetadata? = nil
+    var isRunningSomewhere: Bool = false
 }
 
 enum CoreAudioDeviceLookup {
@@ -231,7 +232,11 @@ enum CoreAudioDeviceLookup {
                 uid: uid,
                 name: deviceName(deviceID: deviceID),
                 modelUID: deviceModelUID(deviceID: deviceID),
-                compatibility: driverCompatibility(deviceID: deviceID)
+                compatibility: driverCompatibility(deviceID: deviceID),
+                isRunningSomewhere: copyUInt32Property(
+                    deviceID: deviceID,
+                    selector: kAudioDevicePropertyDeviceIsRunningSomewhere
+                ) != 0
             )
         }
         return nil

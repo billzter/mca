@@ -31,7 +31,11 @@ private enum MCALiveMixerHealthCounter {
     static let systemDriftDropFrames = 8
     static let micDriftDropFrames = 9
     static let callbackErrorCount = 10
-    static let count = 11
+    static let sharedRingFillFrames = 11
+    static let sharedRingFillErrorFrames = 12
+    static let sharedRingFillErrorAbsFrames = 13
+    static let sharedRingOverrunFrames = 14
+    static let count = 15
 
     static func healthSnapshot(from counters: [UInt64]) -> HealthSnapshot {
         precondition(counters.count >= count)
@@ -46,13 +50,18 @@ private enum MCALiveMixerHealthCounter {
             sourceFrameDeltaAbs: UInt32(clamping: counters[sourceFrameDeltaAbs]),
             systemDriftDropFrames: counters[systemDriftDropFrames],
             micDriftDropFrames: counters[micDriftDropFrames],
-            callbackErrorCount: counters[callbackErrorCount]
+            callbackErrorCount: counters[callbackErrorCount],
+            sharedRingFillFrames: UInt32(clamping: counters[sharedRingFillFrames]),
+            sharedRingFillErrorFrames: Int32(clamping: Int64(bitPattern: counters[sharedRingFillErrorFrames])),
+            sharedRingFillErrorAbsFrames: UInt32(clamping: counters[sharedRingFillErrorAbsFrames]),
+            sharedRingOverrunFrames: counters[sharedRingOverrunFrames]
         )
     }
 }
 
 final class AppLiveMixerController: LiveMixerControlling {
     private let controlQueue = DispatchQueue(label: "com.minamiktr.mca.live-mixer-control")
+    private let mixedCaptureDeviceUID = "com.minamiktr.mca.device.MixedCaptureAudio"
 
     var supportsSelectedAppProcessRestore: Bool {
         MCA_LiveMixerSupportsSelectedAppProcessRestore() != 0
@@ -111,5 +120,9 @@ final class AppLiveMixerController: LiveMixerControlling {
             return nil
         }
         return MCALiveMixerHealthCounter.healthSnapshot(from: counters)
+    }
+
+    @MainActor func isVirtualAudioDeviceRunning() -> Bool {
+        CoreAudioDeviceLookup.device(uid: mixedCaptureDeviceUID)?.isRunningSomewhere == true
     }
 }

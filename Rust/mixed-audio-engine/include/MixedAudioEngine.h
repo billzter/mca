@@ -30,6 +30,10 @@ typedef struct MixedAudioEngineHealth {
     uint64_t system_drift_drop_frames;
     uint64_t mic_drift_drop_frames;
     uint64_t callback_error_count;
+    uint32_t shared_ring_fill_frames;
+    int32_t shared_ring_fill_error_frames;
+    uint32_t shared_ring_fill_error_abs_frames;
+    uint64_t shared_ring_overrun_frames;
 } MixedAudioEngineHealth;
 
 typedef struct MixedAudioEngineHandle MixedAudioEngineHandle;

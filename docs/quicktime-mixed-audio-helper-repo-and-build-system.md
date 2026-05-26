@@ -181,6 +181,10 @@ lto = true
 codegen-units = 1
 ```
 
+`panic = "abort"` is intentional for release. FFI entry points still validate inputs
+and may use `catch_unwind` in unwind-capable debug/test builds, but a release Rust
+panic is treated as a fatal engine bug rather than a recoverable host-app error.
+
 Rust outputs:
 
 ```text

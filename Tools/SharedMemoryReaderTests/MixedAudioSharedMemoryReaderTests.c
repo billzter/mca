@@ -11,7 +11,7 @@
 
 #include "MixedAudioSharedMemoryReader.h"
 
-static const char *kTestShmName = "/mca.reader.test";
+static const char *kTestShmName = "/mcareadertest";
 
 static void fail(const char *message)
 {
@@ -54,7 +54,7 @@ static mixed_audio_shm_header_t *create_mapping(uint32_t capacity_frames, size_t
     shm_unlink(kTestShmName);
 
     size_t byte_count = mixed_audio_shm_total_byte_count(capacity_frames);
-    int fd = shm_open(kTestShmName, O_CREAT | O_EXCL | O_RDWR, 0644);
+    int fd = shm_open(kTestShmName, O_CREAT | O_EXCL | O_RDWR, 0666);
     if (fd < 0) {
         fail("shm_open create mapping");
     }

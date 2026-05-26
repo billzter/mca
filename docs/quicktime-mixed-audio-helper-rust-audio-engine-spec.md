@@ -173,68 +173,71 @@ mixer_tick_frames = 128
 
 At 48 kHz, 128 frames is about 2.67 ms. Tune the tick size after CPU, jitter, and wakeup measurements. Tune the target fill only through an ABI/version change, because the HAL reports it as fixed device latency.
 
-typedef struct mixed_audio_source_format {
-    uint32_t sample_rate;
-    uint32_t channel_count;
-    uint32_t is_interleaved;
-} mixed_audio_source_format_t;
+typedef struct MixedAudioEngineConfig {
+    uint32_t source_capacity_frames;
+    uint32_t max_source_skew_frames;
+    uint32_t max_drift_correction_per_mix;
+    float system_gain;
+    float mic_gain;
+} MixedAudioEngineConfig;
 
-typedef struct mixed_audio_source_timing {
-    uint64_t host_time_nanos;
-    uint64_t source_sample_time;
-    uint32_t has_host_time;
-    uint32_t has_source_sample_time;
-} mixed_audio_source_timing_t;
-
-typedef struct mixed_audio_health {
-    uint64_t pushed_system_frames;
-    uint64_t pushed_mic_frames;
-    uint64_t mixed_frames;
-    uint64_t shared_memory_written_frames;
+typedef struct MixedAudioEngineHealth {
+    uint64_t frames_mixed;
     uint64_t system_underrun_frames;
     uint64_t mic_underrun_frames;
-    uint64_t shared_memory_overrun_frames;
-    uint64_t shared_memory_underrun_frames;
-    uint64_t shared_ring_fill_frames;
-    uint64_t target_shared_ring_fill_frames;
-    int64_t shared_ring_fill_error_frames;
-    double current_output_rate_trim;
-    uint64_t clipped_frames;
+    uint64_t clipped_samples;
+    uint32_t system_queue_frames;
+    uint32_t mic_queue_frames;
+    int32_t source_frame_delta;
+    uint32_t source_frame_delta_abs;
+    uint64_t system_drift_drop_frames;
+    uint64_t mic_drift_drop_frames;
     uint64_t callback_error_count;
-    uint64_t generation;
-    uint64_t last_heartbeat_nanos;
-} mixed_audio_health_t;
+    uint32_t shared_ring_fill_frames;
+    int32_t shared_ring_fill_error_frames;
+    uint32_t shared_ring_fill_error_abs_frames;
+    uint64_t shared_ring_overrun_frames;
+} MixedAudioEngineHealth;
 
-mixed_audio_engine_t *mixed_audio_engine_create(const mixed_audio_config_t *config);
-void mixed_audio_engine_destroy(mixed_audio_engine_t *engine);
+typedef struct MixedAudioSessionConfig {
+    MixedAudioEngineConfig engine;
+    uint32_t shared_memory_capacity_frames;
+    uint32_t max_write_frames;
+} MixedAudioSessionConfig;
 
-mixed_audio_result_t mixed_audio_engine_start(mixed_audio_engine_t *engine);
-void mixed_audio_engine_stop(mixed_audio_engine_t *engine);
+MixedAudioEngineHandle *mixed_audio_engine_create(MixedAudioEngineConfig config);
+void mixed_audio_engine_destroy(MixedAudioEngineHandle *handle);
 
-mixed_audio_result_t mixed_audio_engine_push_system_audio(
-    mixed_audio_engine_t *engine,
-    const float *interleaved_stereo,
-    uint32_t frame_count,
-    const mixed_audio_source_format_t *format,
-    const mixed_audio_source_timing_t *timing
-);
+uint32_t mixed_audio_engine_push_system_interleaved_stereo(
+    MixedAudioEngineHandle *handle,
+    const float *samples,
+    uint32_t frames);
 
-mixed_audio_result_t mixed_audio_engine_push_mic_audio(
-    mixed_audio_engine_t *engine,
-    const float *interleaved_stereo,
-    uint32_t frame_count,
-    const mixed_audio_source_format_t *format,
-    const mixed_audio_source_timing_t *timing
-);
+uint32_t mixed_audio_engine_push_mic_mono(
+    MixedAudioEngineHandle *handle,
+    const float *samples,
+    uint32_t frames);
 
-mixed_audio_result_t mixed_audio_engine_mix_available(mixed_audio_engine_t *engine);
+uint32_t mixed_audio_engine_mix_available(
+    MixedAudioEngineHandle *handle,
+    float *output,
+    uint32_t frames);
 
-mixed_audio_health_t mixed_audio_engine_health(const mixed_audio_engine_t *engine);
+int32_t mixed_audio_engine_get_health(
+    const MixedAudioEngineHandle *handle,
+    MixedAudioEngineHealth *out_health);
+
+MixedAudioSessionHandle *mixed_audio_session_create(MixedAudioSessionConfig config);
+void mixed_audio_session_destroy(MixedAudioSessionHandle *handle);
+
+int32_t mixed_audio_session_get_health(
+    const MixedAudioSessionHandle *handle,
+    MixedAudioEngineHealth *out_health);
 ```
 
-`mixed_audio_engine_push_system_audio` and `mixed_audio_engine_push_mic_audio` are callback-facing. They must copy input frames into preallocated source buffers and return quickly.
+`mixed_audio_engine_push_system_interleaved_stereo` and `mixed_audio_engine_push_mic_mono` are copy-facing. In the app integration, Core Audio callbacks enqueue into preallocated app-side queues; the mixer owner thread drains those queues and calls the Rust session APIs.
 
-`mixed_audio_engine_mix_available` may run from a dedicated processing callback/thread or a controlled app-side processing path. It must still be bounded and non-blocking.
+`mixed_audio_engine_mix_available` and `mixed_audio_session_mix_and_write` run from a controlled app-side mixer owner path, not directly from source callbacks.
 
 ## Real-Time Callback Safety
 
@@ -371,7 +374,7 @@ Do not hide drift problems behind broad acceptance language. Ten-minute mixed ru
 V1 limiter:
 
 - Keep output in `[-1.0, 1.0]`.
-- Increment `clipped_frames` when a pre-limiter sample exceeds `abs(1.0)`.
+- Increment `clipped_samples` when a pre-limiter sample exceeds `abs(1.0)`.
 - Use a simple deterministic soft limiter.
 
 Acceptable v1 limiter:
@@ -442,8 +445,9 @@ Rules:
 - Incoming audio buffers are copied before the FFI call returns.
 - FFI structs use `#[repr(C)]`.
 - No Rust `Vec`, `String`, slices, trait objects, or enums with unspecified layout cross FFI.
-- No panics cross FFI; catch or prevent panic paths.
-- Release builds prefer `panic = "abort"`.
+- Release builds use `panic = "abort"`; no release panic is expected to cross FFI because it terminates the process.
+- FFI entry points must reject invalid inputs before unsafe access, return integer failure codes for expected errors, and keep normal paths panic-free.
+- `catch_unwind` is allowed as a debug/test fail-closed guard for unwind builds, but release safety cannot rely on catching panics.
 - Shared-memory structs use C-compatible fixed-width fields.
 - Shared-memory layout has tests for size, alignment, and offsets.
 - Unsafe code is isolated in `ffi.rs` and `shared_memory_writer.rs`.
@@ -524,9 +528,9 @@ Expose:
 - Generation.
 - Last heartbeat timestamp.
 
-Swift reads `mixed_audio_engine_health` on a timer for diagnostics. Swift must not poll health from audio callbacks.
+Swift reads `mixed_audio_session_get_health` through the native live-mixer wrapper on a timer for diagnostics. Swift must not poll health from audio callbacks.
 
-`mixed_audio_health_t` is a snapshot, not a shared-memory atomic header. Lock-free atomic requirements apply to cross-process shared-memory indices/counters. Signed fields and floating-point fields in `mixed_audio_health_t` are diagnostic snapshot values read outside real-time callbacks.
+`MixedAudioEngineHealth` is a snapshot, not a shared-memory atomic header. Lock-free atomic requirements apply to cross-process shared-memory indices/counters. Signed fields in `MixedAudioEngineHealth` are diagnostic snapshot values read outside real-time callbacks.
 
 ## Testing
 
@@ -566,7 +570,7 @@ Stress tests:
 - Simulate small source-clock drift over 10 minutes and verify bounded buffer growth/underruns.
 - Simulate producer-to-HAL clock drift for 30-60 minutes and verify bounded shared-ring fill.
 - Verify final-stage rate trim remains within configured bounds.
-- Verify no panics during invalid FFI argument tests.
+- Verify invalid FFI arguments fail closed before unsafe access and do not panic in debug/test builds.
 
 ## Acceptance Criteria
 

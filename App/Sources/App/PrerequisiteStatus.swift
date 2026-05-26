@@ -109,6 +109,7 @@ protocol LiveMixerControlling: AnyObject {
     )
     @MainActor func stop(completion: @MainActor @escaping () -> Void)
     @MainActor func currentHealthSnapshot() -> HealthSnapshot?
+    @MainActor func isVirtualAudioDeviceRunning() -> Bool
 }
 
 enum LiveMixerMicrophoneID {

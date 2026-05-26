@@ -21,6 +21,8 @@ struct AppStatusModelTests {
         await testSelectedAppCaptureModeStartsMixerWithSelectedBundleIDs()
         await testChangingSelectedAppsRestartsRunningMixer()
         await testSelectedAppModeWithoutSelectionDoesNotStartMixer()
+        await testAddingFirstSelectedAppStartsBlockedSelectedAppMixer()
+        await testEditingSelectedAppsWhileInAllAppsDoesNotRestartMixerUntilModeSwitch()
         await testSelectedAppDisplayListHidesUnselectedAppsAndKeepsUnavailableSelections()
         await testUnrelatedAppLaunchDoesNotRestartSelectedAppMixer()
         await testSelectedAppLaunchRestartsSelectedAppMixer()
@@ -43,6 +45,7 @@ struct AppStatusModelTests {
         await testDeferredPriorityReorderSeparatesVisualMoveFromMixerRestart()
         await testMicrophonePriorityIgnoresInternalLiveMixerDevices()
         await testLiveHealthRefreshPublishesControllerSnapshot()
+        await testLiveHealthRefreshShowsRecorderActiveWhenVirtualDeviceIsRunning()
         await testLiveHealthRefreshClearsWhenControllerHasNoSnapshot()
         await testLaunchAtStartupStateRefreshesFromController()
         await testLaunchAtStartupToggleUpdatesControllerAndState()
@@ -520,6 +523,67 @@ struct AppStatusModelTests {
         assertEqual(controller.startCount, 0)
         assertEqual(model.sessionState, .stopped)
         assertEqual(model.liveMixerState, .stopped)
+    }
+
+    private static func testAddingFirstSelectedAppStartsBlockedSelectedAppMixer() async {
+        let controller = FakeLiveMixerController()
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .selectedApps
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: FakeAppAudioSourceCatalog(
+                sources: [
+                    AppAudioSource(bundleID: "com.apple.Music", name: "Music"),
+                ]
+            ),
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        model.toggleAppAudioSource(bundleID: "com.apple.Music")
+
+        assertEqual(controller.startCount, 1)
+        assertEqual(controller.lastStartedConfiguration?.captureMode, .selectedApps)
+        assertEqual(controller.lastStartedConfiguration?.selectedAppBundleIDs, ["com.apple.Music"])
+        assertEqual(model.sessionState, .ready)
+        assertEqual(model.liveMixerState, .running)
+    }
+
+    private static func testEditingSelectedAppsWhileInAllAppsDoesNotRestartMixerUntilModeSwitch() async {
+        let controller = FakeLiveMixerController()
+        let appStore = InMemoryAppAudioSelectionStore()
+        appStore.captureMode = .globalSystemAudio
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            appAudioSourceCatalog: FakeAppAudioSourceCatalog(
+                sources: [
+                    AppAudioSource(bundleID: "com.apple.Music", name: "Music"),
+                ]
+            ),
+            appAudioSelectionStore: appStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        model.toggleAppAudioSource(bundleID: "com.apple.Music")
+
+        assertEqual(controller.startCount, 1)
+        assertEqual(controller.lastStartedConfiguration?.captureMode, .globalSystemAudio)
+        assertEqual(controller.lastStartedConfiguration?.selectedAppBundleIDs, [])
+        assertEqual(model.selectedAppBundleIDs, ["com.apple.Music"])
+
+        model.selectCaptureMode(.selectedApps)
+
+        assertEqual(controller.startCount, 2)
+        assertEqual(controller.lastStartedConfiguration?.captureMode, .selectedApps)
+        assertEqual(controller.lastStartedConfiguration?.selectedAppBundleIDs, ["com.apple.Music"])
     }
 
     private static func testSelectedAppDisplayListHidesUnselectedAppsAndKeepsUnavailableSelections() async {
@@ -1216,6 +1280,44 @@ struct AppStatusModelTests {
         assertEqual(model.healthSummary.severity, .degraded)
     }
 
+    private static func testLiveHealthRefreshShowsRecorderActiveWhenVirtualDeviceIsRunning() async {
+        let controller = FakeLiveMixerController()
+        controller.virtualAudioDeviceRunning = true
+        controller.healthSnapshot = HealthSnapshot(
+            framesMixed: 96_000,
+            systemUnderrunFrames: 0,
+            micUnderrunFrames: 0,
+            clippedSamples: 0,
+            systemQueueFrames: 0,
+            micQueueFrames: 0,
+            sourceFrameDelta: 0,
+            sourceFrameDeltaAbs: 0,
+            systemDriftDropFrames: 0,
+            micDriftDropFrames: 0,
+            callbackErrorCount: 0,
+            sharedRingFillFrames: 12_000,
+            sharedRingFillErrorFrames: 9_600,
+            sharedRingFillErrorAbsFrames: 9_600,
+            sharedRingOverrunFrames: 0
+        )
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        for _ in 0..<6 {
+            model.refreshLiveMixerHealth()
+        }
+        controller.healthSnapshot?.sharedRingOverrunFrames = 91_200
+        model.refreshLiveMixerHealth()
+
+        assertEqual(model.sharedRingStats.status, .recorderActive)
+        assertStringContains(model.sharedRingStats.compactValue, "Recorder Active")
+    }
+
     private static func testLiveHealthRefreshClearsWhenControllerHasNoSnapshot() async {
         let controller = FakeLiveMixerController()
         controller.healthSnapshot = nil
@@ -1350,6 +1452,7 @@ private final class FakeLiveMixerController: LiveMixerControlling {
     var supportsSelectedAppProcessRestore = false
     var startResult: LiveMixerStartResult = .started
     var healthSnapshot: HealthSnapshot?
+    var virtualAudioDeviceRunning = false
     private var isRunning = false
     private var startCompletions: [@MainActor (LiveMixerStartResult) -> Void] = []
     private var stopCompletions: [@MainActor () -> Void] = []
@@ -1388,6 +1491,10 @@ private final class FakeLiveMixerController: LiveMixerControlling {
 
     @MainActor func currentHealthSnapshot() -> HealthSnapshot? {
         healthSnapshot
+    }
+
+    @MainActor func isVirtualAudioDeviceRunning() -> Bool {
+        virtualAudioDeviceRunning
     }
 
     @MainActor func completeStart(at index: Int, result: LiveMixerStartResult) {

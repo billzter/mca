@@ -1,10 +1,10 @@
-use crate::{
-    MixedAudioEngineHealth, MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS,
-    MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE,
-};
 pub use crate::generated_shared_memory_abi::{
     MIXED_AUDIO_PHASE2_MARKER_LEFT, MIXED_AUDIO_PHASE2_MARKER_RIGHT, MIXED_AUDIO_SHM_MAGIC,
     MIXED_AUDIO_SHM_NAME, MIXED_AUDIO_SHM_VERSION, MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES,
+};
+use crate::{
+    MixedAudioEngineHealth, MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS,
+    MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE,
 };
 use std::ffi::{c_char, c_int, c_void, CString};
 use std::mem;
@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 const O_RDWR: c_int = 0x0002;
 const O_CREAT: c_int = 0x0200;
 const O_EXCL: c_int = 0x0800;
+pub const MIXED_AUDIO_SHM_MODE: c_int = 0o666;
 const PROT_READ: c_int = 0x01;
 const PROT_WRITE: c_int = 0x02;
 const MAP_SHARED: c_int = 0x0001;
@@ -27,7 +28,58 @@ pub trait SharedMemoryAudioWriter {
         generation: u64,
         heartbeat_nanos: u64,
         health: MixedAudioEngineHealth,
-    );
+    ) -> SharedRingWriteStatus;
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SharedRingWriteStatus {
+    pub fill_frames: u32,
+    pub fill_error_frames: i32,
+    pub fill_error_abs_frames: u32,
+    pub overrun_frames: u64,
+    pub overrun_count: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SharedRingFillErrorStats {
+    pub sample_count: u64,
+    pub min_frames: i32,
+    pub max_frames: i32,
+    pub max_abs_frames: u32,
+    pub mean_frames: f64,
+    pub p95_abs_frames: u32,
+    pub p99_abs_frames: u32,
+}
+
+impl SharedRingFillErrorStats {
+    pub fn from_errors(fill_error_frames: &[i32]) -> Option<Self> {
+        if fill_error_frames.is_empty() {
+            return None;
+        }
+
+        let mut min_frames = i32::MAX;
+        let mut max_frames = i32::MIN;
+        let mut sum = 0_i128;
+        let mut abs_errors = Vec::with_capacity(fill_error_frames.len());
+        for error in fill_error_frames {
+            min_frames = min_frames.min(*error);
+            max_frames = max_frames.max(*error);
+            sum += i128::from(*error);
+            abs_errors.push(error.unsigned_abs());
+        }
+        abs_errors.sort_unstable();
+
+        let sample_count = fill_error_frames.len() as u64;
+        Some(Self {
+            sample_count,
+            min_frames,
+            max_frames,
+            max_abs_frames: *abs_errors.last().unwrap_or(&0),
+            mean_frames: sum as f64 / sample_count as f64,
+            p95_abs_frames: percentile_nearest_rank(&abs_errors, 95),
+            p99_abs_frames: percentile_nearest_rank(&abs_errors, 99),
+        })
+    }
 }
 
 #[repr(C)]
@@ -91,7 +143,7 @@ impl SharedMemoryLayout {
         samples: &[f32],
         generation: u64,
         heartbeat_nanos: u64,
-    ) {
+    ) -> SharedRingWriteStatus {
         let frame_count = samples.len() / MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS as usize;
         let capacity_frames = self.capacity_frames as u64;
         let frame_start = mem::size_of::<MixedAudioSharedMemoryHeader>();
@@ -106,13 +158,16 @@ impl SharedMemoryLayout {
         }
 
         let header = self.header_mut();
+        let write_frame_index = first_frame_index + frame_count as u64;
+        let status = shared_ring_write_status(header, capacity_frames, write_frame_index);
         header.generation.store(generation, Ordering::Release);
         header
             .producer_heartbeat_nanos
             .store(heartbeat_nanos, Ordering::Release);
         header
             .write_frame_index
-            .store(first_frame_index + frame_count as u64, Ordering::Release);
+            .store(write_frame_index, Ordering::Release);
+        status
     }
 
     pub fn increment_clipped_frames(&mut self, clipped_frames: u64) {
@@ -161,20 +216,21 @@ impl SharedMemoryAudioWriter for SharedMemoryLayout {
         generation: u64,
         heartbeat_nanos: u64,
         health: MixedAudioEngineHealth,
-    ) {
-        self.write_frames(first_frame_index, samples, generation, heartbeat_nanos);
+    ) -> SharedRingWriteStatus {
+        let status = self.write_frames(first_frame_index, samples, generation, heartbeat_nanos);
         let header = self.header_mut();
         header.underrun_count.store(
             health.system_underrun_frames + health.mic_underrun_frames,
             Ordering::Relaxed,
         );
         header.dropped_frame_count.store(
-            health.system_drift_drop_frames + health.mic_drift_drop_frames,
+            health.system_drift_drop_frames + health.mic_drift_drop_frames + status.overrun_count,
             Ordering::Relaxed,
         );
         header
             .clipped_frame_count
             .store(health.clipped_samples, Ordering::Relaxed);
+        status
     }
 }
 
@@ -193,14 +249,14 @@ impl SharedMemoryAudioWriter for PosixSharedMemoryWriter {
         generation: u64,
         heartbeat_nanos: u64,
         health: MixedAudioEngineHealth,
-    ) {
+    ) -> SharedRingWriteStatus {
         self.write_frames(
             first_frame_index,
             samples,
             generation,
             heartbeat_nanos,
             health,
-        );
+        )
     }
 }
 
@@ -216,7 +272,11 @@ impl PosixSharedMemoryWriter {
         unsafe {
             shm_unlink(name.as_ptr());
             let previous_umask = umask(0);
-            let fd = shm_open(name.as_ptr(), O_CREAT | O_EXCL | O_RDWR, 0o644 as c_int);
+            let fd = shm_open(
+                name.as_ptr(),
+                O_CREAT | O_EXCL | O_RDWR,
+                MIXED_AUDIO_SHM_MODE,
+            );
             umask(previous_umask);
             if fd < 0 {
                 return Err(format!("shm_open failed errno={}", errno()));
@@ -261,7 +321,7 @@ impl PosixSharedMemoryWriter {
         generation: u64,
         heartbeat_nanos: u64,
         health: MixedAudioEngineHealth,
-    ) {
+    ) -> SharedRingWriteStatus {
         let frame_count = samples.len() / MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS as usize;
         unsafe {
             let frames = self.frames_mut_ptr();
@@ -274,7 +334,10 @@ impl PosixSharedMemoryWriter {
                 *dst.add(1) = samples[src + 1];
             }
 
+            let capacity_frames = self.capacity_frames as u64;
             let header = self.header_mut();
+            let write_frame_index = first_frame_index + frame_count as u64;
+            let status = shared_ring_write_status(header, capacity_frames, write_frame_index);
             header.generation.store(generation, Ordering::Release);
             header
                 .producer_heartbeat_nanos
@@ -284,7 +347,9 @@ impl PosixSharedMemoryWriter {
                 Ordering::Relaxed,
             );
             header.dropped_frame_count.store(
-                health.system_drift_drop_frames + health.mic_drift_drop_frames,
+                health.system_drift_drop_frames
+                    + health.mic_drift_drop_frames
+                    + status.overrun_count,
                 Ordering::Relaxed,
             );
             header
@@ -292,7 +357,8 @@ impl PosixSharedMemoryWriter {
                 .store(health.clipped_samples, Ordering::Relaxed);
             header
                 .write_frame_index
-                .store(first_frame_index + frame_count as u64, Ordering::Release);
+                .store(write_frame_index, Ordering::Release);
+            status
         }
     }
 
@@ -336,6 +402,64 @@ pub fn total_byte_count(capacity_frames: u32) -> usize {
         + capacity_frames as usize
             * MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS as usize
             * mem::size_of::<f32>()
+}
+
+fn shared_ring_write_status(
+    header: &MixedAudioSharedMemoryHeader,
+    capacity_frames: u64,
+    write_frame_index: u64,
+) -> SharedRingWriteStatus {
+    let read_frame_index = header.read_frame_index.load(Ordering::Acquire);
+    let previous_write_frame_index = header.write_frame_index.load(Ordering::Acquire);
+    let previous_fill_frames = previous_write_frame_index.saturating_sub(read_frame_index);
+    let previous_overrun_frames = previous_fill_frames.saturating_sub(capacity_frames);
+    let unread_backlog_frames = write_frame_index.saturating_sub(read_frame_index);
+    let accumulated_overrun_frames = unread_backlog_frames.saturating_sub(capacity_frames);
+    let overrun_frames = accumulated_overrun_frames.saturating_sub(previous_overrun_frames);
+    let overrun_count = if overrun_frames > 0 {
+        header
+            .dropped_frame_count
+            .fetch_add(overrun_frames, Ordering::Relaxed);
+        header
+            .overrun_count
+            .fetch_add(overrun_frames, Ordering::Relaxed)
+            .saturating_add(overrun_frames)
+    } else {
+        header.overrun_count.load(Ordering::Relaxed)
+    };
+    let fill_frames = unread_backlog_frames.min(capacity_frames);
+    let fill_error = signed_frame_delta(fill_frames, MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES as u64);
+
+    SharedRingWriteStatus {
+        fill_frames: u32::try_from(fill_frames).unwrap_or(u32::MAX),
+        fill_error_frames: fill_error,
+        fill_error_abs_frames: fill_error.unsigned_abs(),
+        overrun_frames,
+        overrun_count,
+    }
+}
+
+fn signed_frame_delta(actual_frames: u64, target_frames: u64) -> i32 {
+    let delta = i128::from(actual_frames) - i128::from(target_frames);
+    if delta > i128::from(i32::MAX) {
+        i32::MAX
+    } else if delta < i128::from(i32::MIN) {
+        i32::MIN
+    } else {
+        delta as i32
+    }
+}
+
+fn percentile_nearest_rank(sorted_values: &[u32], percentile: usize) -> u32 {
+    if sorted_values.is_empty() {
+        return 0;
+    }
+    let rank = sorted_values
+        .len()
+        .saturating_mul(percentile)
+        .div_ceil(100)
+        .max(1);
+    sorted_values[rank.saturating_sub(1).min(sorted_values.len() - 1)]
 }
 
 pub fn now_nanos() -> u64 {
