@@ -72,3 +72,7 @@ struct SetupStepPresentation {
         }
     }
 }
+
+enum SetupWindowReopenPolicy {
+    static let shouldAllowSystemDefaultWindowCreation = false
+}

@@ -372,7 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             AppServices.shared.showSetupWindow()
         }
-        return true
+        return SetupWindowReopenPolicy.shouldAllowSystemDefaultWindowCreation
     }
 
     func applicationWillTerminate(_ notification: Notification) {
