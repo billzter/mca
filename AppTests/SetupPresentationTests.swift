@@ -6,6 +6,7 @@ struct SetupPresentationTests {
         testSuccessfulStatusesAreComplete()
         testIncompleteStatusesRemainIncomplete()
         testUserFacingStatusLabelsAreFriendly()
+        testReopenAfterSetupPresentationSuppressesDefaultWindow()
         print("setup presentation tests passed")
     }
 
@@ -51,6 +52,10 @@ struct SetupPresentationTests {
         for (status, expected) in cases {
             assertEqual(SetupStepPresentation(status: status).displayStatus, expected)
         }
+    }
+
+    private static func testReopenAfterSetupPresentationSuppressesDefaultWindow() {
+        assertFalse(SetupWindowReopenPolicy.shouldAllowSystemDefaultWindowCreation)
     }
 }
 
