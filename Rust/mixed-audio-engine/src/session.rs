@@ -2,6 +2,7 @@ use crate::shared_memory::{
     now_nanos, PosixSharedMemoryWriter, SharedMemoryAudioWriter, SharedRingWriteStatus,
     MIXED_AUDIO_SHM_NAME,
 };
+use crate::engine::SourceLevels;
 use crate::{
     Engine, EngineError, MixedAudioEngineConfig, MixedAudioEngineHealth,
     MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS,
@@ -129,6 +130,18 @@ impl<W: SharedMemoryAudioWriter> MixedAudioSession<W> {
 
     pub fn reset_sources(&mut self) {
         self.engine.reset_sources();
+    }
+
+    pub fn set_levels(&mut self, system_gain: f32, mic_gain: f32) -> Result<(), SessionError> {
+        Ok(self.engine.set_levels(system_gain, mic_gain)?)
+    }
+
+    pub fn set_mic_compression_enabled(&mut self, enabled: bool) -> Result<(), SessionError> {
+        Ok(self.engine.set_mic_compression_enabled(enabled)?)
+    }
+
+    pub fn take_source_levels(&mut self) -> SourceLevels {
+        self.engine.take_source_levels()
     }
 
     pub fn writer(&self) -> &W {
@@ -277,6 +290,76 @@ pub unsafe extern "C" fn mixed_audio_session_reset_sources(
     catch_unwind(AssertUnwindSafe(|| {
         let session = &mut (*handle).session;
         session.reset_sources();
+        0
+    }))
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+/// Updates source gains for subsequent session mixes without resetting sources or shared memory.
+///
+/// # Safety
+///
+/// `handle` must be a live session pointer.
+pub unsafe extern "C" fn mixed_audio_session_set_levels(
+    handle: *mut MixedAudioSessionHandle,
+    system_gain: f32,
+    mic_gain: f32,
+) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        let session = &mut (*handle).session;
+        session
+            .set_levels(system_gain, mic_gain)
+            .map(|_| 0)
+            .unwrap_or(-1)
+    }))
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+/// Enables or disables the session's configured mic compression preset.
+///
+/// # Safety
+///
+/// `handle` must be a live session pointer.
+pub unsafe extern "C" fn mixed_audio_session_set_mic_compression_enabled(
+    handle: *mut MixedAudioSessionHandle,
+    enabled: u32,
+) -> i32 {
+    if handle.is_null() || (enabled != 0 && enabled != 1) {
+        return -1;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        let session = &mut (*handle).session;
+        session
+            .set_mic_compression_enabled(enabled != 0)
+            .map(|_| 0)
+            .unwrap_or(-1)
+    }))
+    .unwrap_or(-1)
+}
+
+#[no_mangle]
+/// Copies peak source levels since the previous read and resets the meter window.
+///
+/// # Safety
+///
+/// `handle` must be a live session pointer. Output pointers must point to writable `f32` storage.
+pub unsafe extern "C" fn mixed_audio_session_copy_levels(
+    handle: *mut MixedAudioSessionHandle,
+    out_system_peak: *mut f32,
+    out_mic_peak: *mut f32,
+) -> i32 {
+    if handle.is_null() || out_system_peak.is_null() || out_mic_peak.is_null() {
+        return -1;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        let levels = (*handle).session.take_source_levels();
+        *out_system_peak = levels.system_peak;
+        *out_mic_peak = levels.mic_peak;
         0
     }))
     .unwrap_or(-1)

@@ -16,6 +16,14 @@ typedef struct MixedAudioEngineConfig {
     uint32_t max_drift_correction_per_mix;
     float system_gain;
     float mic_gain;
+    uint32_t mic_compression_enabled;
+    float mic_compression_threshold_db;
+    float mic_compression_ratio;
+    float mic_compression_attack_ms;
+    float mic_compression_release_ms;
+    float mic_compression_makeup_db;
+    float mic_gate_threshold_db;
+    float mic_gate_attenuation_db;
 } MixedAudioEngineConfig;
 
 typedef struct MixedAudioEngineHealth {
@@ -63,6 +71,11 @@ uint32_t mixed_audio_engine_mix_available(
     float *output,
     uint32_t frames);
 
+int32_t mixed_audio_engine_set_levels(
+    MixedAudioEngineHandle *handle,
+    float system_gain,
+    float mic_gain);
+
 int32_t mixed_audio_engine_get_health(
     const MixedAudioEngineHandle *handle,
     MixedAudioEngineHealth *out_health);
@@ -85,6 +98,20 @@ uint32_t mixed_audio_session_mix_and_write(
     uint32_t frames);
 
 int32_t mixed_audio_session_reset_sources(MixedAudioSessionHandle *handle);
+
+int32_t mixed_audio_session_set_levels(
+    MixedAudioSessionHandle *handle,
+    float system_gain,
+    float mic_gain);
+
+int32_t mixed_audio_session_set_mic_compression_enabled(
+    MixedAudioSessionHandle *handle,
+    uint32_t enabled);
+
+int32_t mixed_audio_session_copy_levels(
+    MixedAudioSessionHandle *handle,
+    float *out_system_peak,
+    float *out_mic_peak);
 
 int32_t mixed_audio_session_get_health(
     const MixedAudioSessionHandle *handle,

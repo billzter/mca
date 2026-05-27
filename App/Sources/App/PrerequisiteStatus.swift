@@ -62,6 +62,78 @@ protocol AppAudioSelectionStoring: AnyObject {
     var selectedAppBundleIDs: [String] { get set }
 }
 
+struct AudioLevelSettings: Equatable {
+    static let minimumDecibels = -24.0
+    static let maximumDecibels = 12.0
+    static let defaultSystemDecibels = -6.0
+    static let defaultMicrophoneDecibels = 6.0
+    static let defaultEnhanceVoice = true
+
+    let systemDecibels: Double
+    let microphoneDecibels: Double
+    let enhanceVoice: Bool
+
+    init(
+        systemDecibels: Double = Self.defaultSystemDecibels,
+        microphoneDecibels: Double = Self.defaultMicrophoneDecibels,
+        enhanceVoice: Bool = Self.defaultEnhanceVoice
+    ) {
+        self.systemDecibels = Self.clampedDecibels(systemDecibels)
+        self.microphoneDecibels = Self.clampedDecibels(microphoneDecibels)
+        self.enhanceVoice = enhanceVoice
+    }
+
+    var systemGain: Float {
+        Self.linearGain(fromDecibels: systemDecibels)
+    }
+
+    var microphoneGain: Float {
+        Self.linearGain(fromDecibels: microphoneDecibels)
+    }
+
+    private static func clampedDecibels(_ value: Double) -> Double {
+        guard value.isFinite else {
+            return 0.0
+        }
+        return min(max(value, minimumDecibels), maximumDecibels)
+    }
+
+    private static func linearGain(fromDecibels decibels: Double) -> Float {
+        Float(pow(10.0, decibels / 20.0))
+    }
+}
+
+struct SourceLevelMeterSnapshot: Equatable {
+    static let empty = SourceLevelMeterSnapshot(systemPeak: 0.0, microphonePeak: 0.0)
+    static let decayFactor: Float = 0.85
+
+    let systemPeak: Float
+    let microphonePeak: Float
+
+    init(systemPeak: Float, microphonePeak: Float) {
+        self.systemPeak = Self.sanitizedPeak(systemPeak)
+        self.microphonePeak = Self.sanitizedPeak(microphonePeak)
+    }
+
+    func decayed(toward next: SourceLevelMeterSnapshot) -> SourceLevelMeterSnapshot {
+        SourceLevelMeterSnapshot(
+            systemPeak: max(next.systemPeak, systemPeak * Self.decayFactor),
+            microphonePeak: max(next.microphonePeak, microphonePeak * Self.decayFactor)
+        )
+    }
+
+    private static func sanitizedPeak(_ value: Float) -> Float {
+        guard value.isFinite else {
+            return 0.0
+        }
+        return max(0.0, value)
+    }
+}
+
+protocol AudioLevelSettingsStoring: AnyObject {
+    var settings: AudioLevelSettings { get set }
+}
+
 protocol MicrophoneSelectionStoring: AnyObject {
     var selectedMicrophoneID: String? { get set }
     var preferredMicrophoneIDs: [String] { get set }
@@ -108,7 +180,9 @@ protocol LiveMixerControlling: AnyObject {
         completion: @MainActor @escaping (LiveMixerStartResult) -> Void
     )
     @MainActor func stop(completion: @MainActor @escaping () -> Void)
+    @MainActor func setAudioLevels(_ settings: AudioLevelSettings)
     @MainActor func currentHealthSnapshot() -> HealthSnapshot?
+    @MainActor func currentSourceLevelSnapshot() -> SourceLevelMeterSnapshot?
     @MainActor func isVirtualAudioDeviceRunning() -> Bool
 }
 

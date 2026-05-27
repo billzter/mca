@@ -11,12 +11,20 @@ fn default_config() -> MixedAudioEngineConfig {
         max_drift_correction_per_mix: 8,
         system_gain: 1.0,
         mic_gain: 1.0,
+        mic_compression_enabled: 0,
+        mic_compression_threshold_db: -24.0,
+        mic_compression_ratio: 3.0,
+        mic_compression_attack_ms: 8.0,
+        mic_compression_release_ms: 200.0,
+        mic_compression_makeup_db: 6.0,
+        mic_gate_threshold_db: -50.0,
+        mic_gate_attenuation_db: -24.0,
     }
 }
 
 #[test]
 fn config_and_health_have_stable_c_layout() {
-    assert_eq!(std::mem::size_of::<MixedAudioEngineConfig>(), 20);
+    assert_eq!(std::mem::size_of::<MixedAudioEngineConfig>(), 52);
     assert_eq!(std::mem::align_of::<MixedAudioEngineConfig>(), 4);
     assert_eq!(std::mem::size_of::<MixedAudioEngineHealth>(), 96);
     assert_eq!(std::mem::align_of::<MixedAudioEngineHealth>(), 8);
@@ -41,6 +49,208 @@ fn mixes_system_stereo_and_centered_mic_with_gains() {
 }
 
 #[test]
+fn live_level_update_changes_subsequent_mix_without_resetting_health() {
+    let mut engine = mixed_audio_engine::Engine::new(default_config()).unwrap();
+    engine
+        .push_system_interleaved_stereo(&[0.20, -0.20])
+        .unwrap();
+    engine.push_mic_mono(&[0.10]).unwrap();
+
+    engine.set_levels(0.50, 2.0).unwrap();
+
+    let mut output = [0.0_f32; 2];
+    let mixed = engine.mix_available(1, &mut output).unwrap();
+
+    assert_eq!(mixed, 1);
+    assert_eq!(output, [0.30, 0.10]);
+    assert_eq!(engine.health().frames_mixed, 1);
+}
+
+#[test]
+fn live_level_update_rejects_non_finite_or_absurd_values() {
+    let mut engine = mixed_audio_engine::Engine::new(default_config()).unwrap();
+
+    assert!(engine.set_levels(f32::NAN, 1.0).is_err());
+    assert!(engine.set_levels(1.0, f32::INFINITY).is_err());
+    assert!(engine.set_levels(-0.1, 1.0).is_err());
+    assert!(engine.set_levels(1.0, 32.0).is_err());
+}
+
+#[test]
+fn source_level_meters_report_peak_since_last_read_and_reset() {
+    let mut engine = mixed_audio_engine::Engine::new(default_config()).unwrap();
+    engine.set_levels(0.50, 2.0).unwrap();
+    engine
+        .push_system_interleaved_stereo(&[0.20, -0.80, 0.40, 0.10])
+        .unwrap();
+    engine.push_mic_mono(&[0.05, -0.30]).unwrap();
+
+    let mut output = [0.0_f32; 4];
+    engine.mix_available(2, &mut output).unwrap();
+    let levels = engine.take_source_levels();
+
+    assert_eq!(levels.system_peak, 0.40);
+    assert_eq!(levels.mic_peak, 0.60);
+    assert_eq!(engine.take_source_levels().system_peak, 0.0);
+    assert_eq!(engine.take_source_levels().mic_peak, 0.0);
+}
+
+#[test]
+fn source_level_meters_are_post_processing_and_post_slider() {
+    let mut config = default_config();
+    config.mic_compression_enabled = 1;
+    config.mic_compression_threshold_db = 0.0;
+    config.mic_compression_ratio = 1.0;
+    config.mic_compression_makeup_db = 6.0;
+    config.mic_gate_threshold_db = -80.0;
+    config.mic_gate_attenuation_db = 0.0;
+    config.system_gain = 0.25;
+    config.mic_gain = 2.0;
+    let mut engine = mixed_audio_engine::Engine::new(config).unwrap();
+    engine
+        .push_system_interleaved_stereo(&[0.80, -0.40])
+        .unwrap();
+    engine.push_mic_mono(&[0.10]).unwrap();
+
+    let mut output = [0.0_f32; 2];
+    engine.mix_available(1, &mut output).unwrap();
+    let levels = engine.take_source_levels();
+
+    assert_eq!(levels.system_peak, 0.20);
+    assert!((levels.mic_peak - 0.39905244).abs() < 0.000_001);
+}
+
+#[test]
+fn mic_compression_reduces_sustained_loud_voice() {
+    let mut config = default_config();
+    config.mic_compression_enabled = 1;
+    config.mic_compression_threshold_db = -20.0;
+    config.mic_compression_ratio = 4.0;
+    config.mic_compression_attack_ms = 0.1;
+    config.mic_compression_release_ms = 200.0;
+    config.mic_compression_makeup_db = 0.0;
+    config.mic_gate_threshold_db = -80.0;
+    config.mic_gate_attenuation_db = 0.0;
+    let mut engine = mixed_audio_engine::Engine::new(config).unwrap();
+    engine.push_mic_mono(&vec![1.0; 256]).unwrap();
+
+    let mut output = vec![0.0_f32; 256 * 2];
+    engine.mix_available(256, &mut output).unwrap();
+
+    let last_left = output[400];
+    assert!(last_left > 0.15, "last_left={last_left}");
+    assert!(last_left < 0.25, "last_left={last_left}");
+}
+
+#[test]
+fn mic_compression_makeup_gain_lifts_voice_when_not_reducing() {
+    let mut config = default_config();
+    config.mic_compression_enabled = 1;
+    config.mic_compression_threshold_db = 0.0;
+    config.mic_compression_ratio = 1.0;
+    config.mic_compression_attack_ms = 8.0;
+    config.mic_compression_release_ms = 200.0;
+    config.mic_compression_makeup_db = 6.0;
+    config.mic_gate_threshold_db = -80.0;
+    config.mic_gate_attenuation_db = 0.0;
+    let mut engine = mixed_audio_engine::Engine::new(config).unwrap();
+    engine.push_mic_mono(&[0.10]).unwrap();
+
+    let mut output = [0.0_f32; 2];
+    engine.mix_available(1, &mut output).unwrap();
+
+    assert!((output[0] - 0.19952622).abs() < 0.000_001);
+    assert_eq!(output[0], output[1]);
+}
+
+#[test]
+fn mic_gate_attenuates_room_tone_before_makeup_gain() {
+    let mut config = default_config();
+    config.mic_compression_enabled = 1;
+    config.mic_compression_threshold_db = -24.0;
+    config.mic_compression_ratio = 3.0;
+    config.mic_compression_attack_ms = 8.0;
+    config.mic_compression_release_ms = 200.0;
+    config.mic_compression_makeup_db = 6.0;
+    config.mic_gate_threshold_db = -50.0;
+    config.mic_gate_attenuation_db = -24.0;
+    let mut engine = mixed_audio_engine::Engine::new(config).unwrap();
+    engine.push_mic_mono(&[0.001]).unwrap();
+
+    let mut output = [0.0_f32; 2];
+    engine.mix_available(1, &mut output).unwrap();
+
+    assert!(output[0] < 0.000_2, "output={}", output[0]);
+}
+
+#[test]
+fn reset_sources_clears_mic_compression_envelope() {
+    let mut config = default_config();
+    config.mic_compression_enabled = 1;
+    config.mic_compression_threshold_db = -20.0;
+    config.mic_compression_ratio = 4.0;
+    config.mic_compression_attack_ms = 0.1;
+    config.mic_compression_release_ms = 200.0;
+    config.mic_compression_makeup_db = 0.0;
+    config.mic_gate_threshold_db = -80.0;
+    config.mic_gate_attenuation_db = 0.0;
+    let mut engine = mixed_audio_engine::Engine::new(config).unwrap();
+    engine.push_mic_mono(&vec![1.0; 256]).unwrap();
+    let mut output = vec![0.0_f32; 256 * 2];
+    engine.mix_available(256, &mut output).unwrap();
+    assert!(output[510] < 0.25);
+
+    engine.reset_sources();
+    engine.push_mic_mono(&[1.0]).unwrap();
+    let mut after_reset = [0.0_f32; 2];
+    engine.mix_available(1, &mut after_reset).unwrap();
+
+    assert!(after_reset[0] > 0.50, "after_reset={}", after_reset[0]);
+}
+
+#[test]
+fn mic_compression_config_rejects_invalid_parameters() {
+    let mut config = default_config();
+    config.mic_compression_enabled = 1;
+    config.mic_compression_ratio = 0.5;
+    assert!(mixed_audio_engine::Engine::new(config).is_err());
+
+    let mut config = default_config();
+    config.mic_compression_enabled = 1;
+    config.mic_compression_attack_ms = 0.0;
+    assert!(mixed_audio_engine::Engine::new(config).is_err());
+
+    let mut config = default_config();
+    config.mic_compression_enabled = 1;
+    config.mic_compression_makeup_db = f32::NAN;
+    assert!(mixed_audio_engine::Engine::new(config).is_err());
+}
+
+#[test]
+fn live_mic_compression_toggle_changes_subsequent_mix() {
+    let mut config = default_config();
+    config.mic_compression_enabled = 0;
+    config.mic_compression_threshold_db = 0.0;
+    config.mic_compression_ratio = 1.0;
+    config.mic_compression_makeup_db = 6.0;
+    config.mic_gate_threshold_db = -80.0;
+    config.mic_gate_attenuation_db = 0.0;
+    let mut engine = mixed_audio_engine::Engine::new(config).unwrap();
+
+    engine.set_mic_compression_enabled(true).unwrap();
+    engine.push_mic_mono(&[0.10]).unwrap();
+    let mut output = [0.0_f32; 2];
+    engine.mix_available(1, &mut output).unwrap();
+    assert!((output[0] - 0.19952622).abs() < 0.000_001);
+
+    engine.set_mic_compression_enabled(false).unwrap();
+    engine.push_mic_mono(&[0.10]).unwrap();
+    let mut dry_output = [0.0_f32; 2];
+    engine.mix_available(1, &mut dry_output).unwrap();
+    assert_eq!(dry_output, [0.10, 0.10]);
+}
+
+#[test]
 fn missing_mic_mixes_system_with_silence_and_counts_underrun() {
     let mut engine = mixed_audio_engine::Engine::new(default_config()).unwrap();
     engine
@@ -57,7 +267,7 @@ fn missing_mic_mixes_system_with_silence_and_counts_underrun() {
 }
 
 #[test]
-fn clamps_output_and_counts_clipped_samples() {
+fn soft_limits_output_and_counts_overloaded_samples() {
     let mut engine = mixed_audio_engine::Engine::new(default_config()).unwrap();
     engine
         .push_system_interleaved_stereo(&[0.80, -0.80])
@@ -68,8 +278,40 @@ fn clamps_output_and_counts_clipped_samples() {
     let mixed = engine.mix_available(1, &mut output).unwrap();
 
     assert_eq!(mixed, 1);
-    assert_eq!(output, [1.0, -0.19999999]);
+    assert!(output[0] > 0.95, "limited={}", output[0]);
+    assert!(output[0] < 1.0, "limited={}", output[0]);
+    assert_eq!(output[1], -0.19999999);
     assert_eq!(engine.health().clipped_samples, 1);
+}
+
+#[test]
+fn soft_limiter_is_monotonic_around_full_scale() {
+    let mut engine = mixed_audio_engine::Engine::new(default_config()).unwrap();
+    engine
+        .push_system_interleaved_stereo(&[1.0, 0.0, 1.0001, 0.0])
+        .unwrap();
+
+    let mut output = [0.0_f32; 4];
+    engine.mix_available(2, &mut output).unwrap();
+
+    assert!(output[0] > 0.95, "first={}", output[0]);
+    assert!(output[2] >= output[0], "first={} second={}", output[0], output[2]);
+    assert!(output[2] < 1.0, "second={}", output[2]);
+    assert_eq!(engine.health().clipped_samples, 1);
+}
+
+#[test]
+fn limiter_rejects_non_finite_samples() {
+    let mut engine = mixed_audio_engine::Engine::new(default_config()).unwrap();
+    engine
+        .push_system_interleaved_stereo(&[f32::INFINITY, f32::NAN, f32::NEG_INFINITY, 0.0])
+        .unwrap();
+
+    let mut output = [0.0_f32; 4];
+    engine.mix_available(2, &mut output).unwrap();
+
+    assert_eq!(output, [1.0, 0.0, -1.0, 0.0]);
+    assert_eq!(engine.health().clipped_samples, 3);
 }
 
 #[test]
@@ -144,6 +386,11 @@ fn c_abi_push_mix_and_health_snapshot_work() {
     let handle = unsafe { mixed_audio_engine::mixed_audio_engine_create(config) };
     assert!(!handle.is_null());
 
+    assert_eq!(
+        unsafe { mixed_audio_engine::mixed_audio_engine_set_levels(handle, 0.50, 2.0) },
+        0
+    );
+
     let system = [0.10_f32, -0.10, 0.20, -0.20];
     let mic = [0.05_f32, 0.10];
     let system_pushed = unsafe {
@@ -163,7 +410,7 @@ fn c_abi_push_mix_and_health_snapshot_work() {
         mixed_audio_engine::mixed_audio_engine_mix_available(handle, output.as_mut_ptr(), 2)
     };
     assert_eq!(mixed, 2);
-    assert_eq!(output, [0.15, -0.05, 0.30, -0.10]);
+    assert_eq!(output, [0.15, 0.05, 0.30, 0.10]);
 
     let mut health = MixedAudioEngineHealth::default();
     let health_ok =
@@ -185,12 +432,23 @@ fn c_abi_null_handle_is_rejected() {
         )
     };
     assert_eq!(mixed, 0);
+    assert_eq!(
+        unsafe {
+            mixed_audio_engine::mixed_audio_engine_set_levels(
+                std::ptr::null_mut::<MixedAudioEngineHandle>(),
+                1.0,
+                1.0,
+            )
+        },
+        -1
+    );
 }
 
 #[test]
 fn c_abi_invalid_inputs_fail_closed_before_panic_paths() {
     use mixed_audio_engine::session::{
-        mixed_audio_session_create, mixed_audio_session_get_health,
+        mixed_audio_session_copy_levels, mixed_audio_session_create, mixed_audio_session_get_health,
+        mixed_audio_session_set_levels, mixed_audio_session_set_mic_compression_enabled,
         mixed_audio_session_mix_and_write, MixedAudioSessionConfig, MixedAudioSessionHandle,
     };
 
@@ -238,6 +496,37 @@ fn c_abi_invalid_inputs_fail_closed_before_panic_paths() {
             mixed_audio_session_get_health(
                 std::ptr::null::<MixedAudioSessionHandle>(),
                 std::ptr::null_mut(),
+            )
+        },
+        -1
+    );
+    assert_eq!(
+        unsafe {
+            mixed_audio_session_set_levels(
+                std::ptr::null_mut::<MixedAudioSessionHandle>(),
+                1.0,
+                1.0,
+            )
+        },
+        -1
+    );
+    assert_eq!(
+        unsafe {
+            mixed_audio_session_set_mic_compression_enabled(
+                std::ptr::null_mut::<MixedAudioSessionHandle>(),
+                1,
+            )
+        },
+        -1
+    );
+    let mut system_peak = 0.0_f32;
+    let mut mic_peak = 0.0_f32;
+    assert_eq!(
+        unsafe {
+            mixed_audio_session_copy_levels(
+                std::ptr::null_mut::<MixedAudioSessionHandle>(),
+                &mut system_peak,
+                &mut mic_peak,
             )
         },
         -1
@@ -423,6 +712,50 @@ fn session_writes_real_capture_buffers_to_shared_memory() {
     assert_eq!(health.shared_ring_fill_error_frames, -2398);
     assert_eq!(health.shared_ring_fill_error_abs_frames, 2398);
     assert_eq!(health.shared_ring_overrun_frames, 0);
+}
+
+#[test]
+fn session_level_update_changes_live_writer_output() {
+    use mixed_audio_engine::session::MixedAudioSession;
+    use mixed_audio_engine::shared_memory::SharedMemoryLayout;
+
+    let layout = SharedMemoryLayout::new_for_test(16);
+    let mut session = MixedAudioSession::new_for_writer(default_config(), layout, 4).unwrap();
+
+    session.set_levels(0.50, 2.0).unwrap();
+    session
+        .push_system_interleaved_stereo(&[0.20, -0.20])
+        .unwrap();
+    session.push_mic_mono(&[0.10]).unwrap();
+
+    let written = session.mix_and_write(1, 4321).unwrap();
+
+    assert_eq!(written, 1);
+    assert_eq!(&session.writer().frames()[..2], &[0.30, 0.10]);
+    assert_eq!(session.health().frames_mixed, 1);
+}
+
+#[test]
+fn session_level_reader_reports_peak_since_last_read() {
+    use mixed_audio_engine::session::MixedAudioSession;
+    use mixed_audio_engine::shared_memory::SharedMemoryLayout;
+
+    let layout = SharedMemoryLayout::new_for_test(16);
+    let mut session = MixedAudioSession::new_for_writer(default_config(), layout, 4).unwrap();
+
+    session.set_levels(0.50, 2.0).unwrap();
+    session
+        .push_system_interleaved_stereo(&[0.20, -0.80])
+        .unwrap();
+    session.push_mic_mono(&[0.30]).unwrap();
+    session.mix_and_write(1, 1234).unwrap();
+
+    let levels = session.take_source_levels();
+
+    assert_eq!(levels.system_peak, 0.40);
+    assert_eq!(levels.mic_peak, 0.60);
+    assert_eq!(session.take_source_levels().system_peak, 0.0);
+    assert_eq!(session.take_source_levels().mic_peak, 0.0);
 }
 
 #[test]

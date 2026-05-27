@@ -10,10 +10,25 @@ private func MCA_LiveMixerStart(
 @_silgen_name("MCA_LiveMixerStop")
 private func MCA_LiveMixerStop()
 
+@_silgen_name("MCA_LiveMixerSetLevels")
+private func MCA_LiveMixerSetLevels(
+    _ systemGain: Float,
+    _ microphoneGain: Float
+) -> Int32
+
+@_silgen_name("MCA_LiveMixerSetVoiceEnhancement")
+private func MCA_LiveMixerSetVoiceEnhancement(_ enabled: Int32) -> Int32
+
 @_silgen_name("MCA_LiveMixerCopyHealthCounters")
 private func MCA_LiveMixerCopyHealthCounters(
     _ outCounters: UnsafeMutablePointer<UInt64>,
     _ counterCount: UInt32
+) -> Int32
+
+@_silgen_name("MCA_LiveMixerCopyLevels")
+private func MCA_LiveMixerCopyLevels(
+    _ outSystemPeak: UnsafeMutablePointer<Float>,
+    _ outMicPeak: UnsafeMutablePointer<Float>
 ) -> Int32
 
 @_silgen_name("MCA_LiveMixerSupportsSelectedAppProcessRestore")
@@ -120,6 +135,17 @@ final class AppLiveMixerController: LiveMixerControlling {
         }
     }
 
+    @MainActor func setAudioLevels(_ settings: AudioLevelSettings) {
+        let requestedSettings = settings
+        controlQueue.async {
+            _ = MCA_LiveMixerSetLevels(
+                requestedSettings.systemGain,
+                requestedSettings.microphoneGain
+            )
+            _ = MCA_LiveMixerSetVoiceEnhancement(requestedSettings.enhanceVoice ? 1 : 0)
+        }
+    }
+
     @MainActor func currentHealthSnapshot() -> HealthSnapshot? {
         var counters = Array(repeating: UInt64(0), count: MCALiveMixerHealthCounter.count)
         let status = counters.withUnsafeMutableBufferPointer { buffer in
@@ -132,6 +158,16 @@ final class AppLiveMixerController: LiveMixerControlling {
             return nil
         }
         return MCALiveMixerHealthCounter.healthSnapshot(from: counters)
+    }
+
+    @MainActor func currentSourceLevelSnapshot() -> SourceLevelMeterSnapshot? {
+        var systemPeak: Float = 0.0
+        var micPeak: Float = 0.0
+        let status = MCA_LiveMixerCopyLevels(&systemPeak, &micPeak)
+        guard status == 0 else {
+            return nil
+        }
+        return SourceLevelMeterSnapshot(systemPeak: systemPeak, microphonePeak: micPeak)
     }
 
     @MainActor func isVirtualAudioDeviceRunning() -> Bool {

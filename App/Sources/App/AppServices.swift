@@ -9,6 +9,8 @@ final class AppServices: ObservableObject {
     static let shared = AppServices()
 
     let model: AppStatusModel
+    let sourceLevelMeterModel: SourceLevelMeterModel
+    let sourceLevelMeterPollingController: SourceLevelMeterPollingController
     private let setupWindowPresenter = SetupWindowPresenter()
     private var healthPollingCancellable: AnyCancellable?
     private lazy var deviceChangeObserver = DeviceChangeObserver(
@@ -33,18 +35,30 @@ final class AppServices: ObservableObject {
     )
 
     private init() {
-        model = AppStatusModel(
+        let liveMixerController = AppLiveMixerController()
+        let statusModel = AppStatusModel(
             prerequisiteChecker: AppPrerequisiteChecker(),
             microphonePermissionRequester: AppMicrophonePermissionRequester(),
             systemAudioAccessTester: AppSystemAudioAccessTester(),
-            liveMixerController: AppLiveMixerController(),
+            liveMixerController: liveMixerController,
             microphoneCatalog: AppMicrophoneCatalog(),
             microphoneSelectionStore: AppMicrophoneSelectionStore(),
             appAudioSourceCatalog: AppAudioSourceCatalog(),
             appAudioSelectionStore: AppAudioSelectionStore(),
+            audioLevelSettingsStore: AppAudioLevelSettingsStore(),
             systemAudioAccessStore: AppSystemAudioAccessStore(),
             launchAtStartupController: AppLaunchAtStartupController()
         )
+        model = statusModel
+        sourceLevelMeterModel = SourceLevelMeterModel(
+            liveMixerController: liveMixerController,
+            isMixerRunning: { [weak statusModel] in
+                statusModel?.liveMixerState == .running
+            }
+        )
+        sourceLevelMeterPollingController = SourceLevelMeterPollingController { [weak sourceLevelMeterModel] in
+            sourceLevelMeterModel?.refresh()
+        }
     }
 
     func applicationDidFinishLaunching() {
@@ -57,7 +71,11 @@ final class AppServices: ObservableObject {
     }
 
     func showSetupWindow() {
-        setupWindowPresenter.show(model: model)
+        setupWindowPresenter.show(
+            model: model,
+            sourceLevelMeterModel: sourceLevelMeterModel,
+            sourceLevelMeterPollingController: sourceLevelMeterPollingController
+        )
     }
 
     private func startHealthPolling() {
@@ -383,18 +401,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-private final class SetupWindowPresenter {
+private final class SetupWindowPresenter: NSObject, NSWindowDelegate {
     private var window: NSWindow?
+    private weak var sourceLevelMeterPollingController: SourceLevelMeterPollingController?
 
-    func show(model: AppStatusModel) {
-        let setupWindow = window ?? makeWindow(model: model)
+    func show(
+        model: AppStatusModel,
+        sourceLevelMeterModel: SourceLevelMeterModel,
+        sourceLevelMeterPollingController: SourceLevelMeterPollingController
+    ) {
+        self.sourceLevelMeterPollingController = sourceLevelMeterPollingController
+        let setupWindow = window ?? makeWindow(
+            model: model,
+            sourceLevelMeterModel: sourceLevelMeterModel
+        )
         window = setupWindow
         setupWindow.makeKeyAndOrderFront(nil)
+        sourceLevelMeterPollingController.start()
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func makeWindow(model: AppStatusModel) -> NSWindow {
-        let hostingView = NSHostingView(rootView: SetupView(model: model))
+    private func makeWindow(
+        model: AppStatusModel,
+        sourceLevelMeterModel: SourceLevelMeterModel
+    ) -> NSWindow {
+        let hostingView = NSHostingView(rootView: SetupView(
+            model: model,
+            sourceLevelMeterModel: sourceLevelMeterModel
+        ))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -404,7 +438,12 @@ private final class SetupWindowPresenter {
         window.title = "MixedCaptureAudio Setup"
         window.contentView = hostingView
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.center()
         return window
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        sourceLevelMeterPollingController?.stop()
     }
 }

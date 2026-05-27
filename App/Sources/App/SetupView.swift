@@ -1,4 +1,5 @@
 import AppKit
+import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -8,6 +9,7 @@ private enum SetupLayout {
 
 struct SetupView: View {
     @ObservedObject var model: AppStatusModel
+    let sourceLevelMeterModel: SourceLevelMeterModel
 
     var body: some View {
         ScrollView {
@@ -82,6 +84,7 @@ struct SetupView: View {
             MicrophoneAccessPanel(model: model)
             MicrophoneFaultPanel(model: model)
             MicrophonePriorityPanel(model: model)
+            AudioLevelPanel(model: model, sourceLevelMeterModel: sourceLevelMeterModel)
             AppAudioSelectionPanel(model: model)
             SystemAudioAccessPanel(model: model)
 
@@ -150,6 +153,163 @@ private struct StatusBadge: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background((isComplete ? Color.green.opacity(0.10) : Color.primary.opacity(0.04)), in: Capsule())
+    }
+}
+
+private struct AudioLevelPanel: View {
+    @ObservedObject var model: AppStatusModel
+    @ObservedObject var sourceLevelMeterModel: SourceLevelMeterModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Audio Balance")
+                        .font(.headline)
+                    Text("Set computer audio and voice levels for the mixed input.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            VStack(spacing: 10) {
+                Toggle(isOn: Binding(
+                    get: { model.audioLevelSettings.enhanceVoice },
+                    set: { model.setEnhanceVoice($0) }
+                )) {
+                    Label("Enhance Voice", systemImage: "waveform.and.mic")
+                        .font(.caption.weight(.medium))
+                }
+                .toggleStyle(.checkbox)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                AudioLevelSliderRow(
+                    title: "Computer",
+                    systemImage: "speaker.wave.2",
+                    peak: sourceLevelMeterModel.snapshot.systemPeak,
+                    decibels: Binding(
+                        get: { model.audioLevelSettings.systemDecibels },
+                        set: { model.setSystemAudioLevelDecibels($0) }
+                    )
+                )
+                AudioLevelSliderRow(
+                    title: "Voice",
+                    systemImage: "mic",
+                    peak: sourceLevelMeterModel.snapshot.microphonePeak,
+                    decibels: Binding(
+                        get: { model.audioLevelSettings.microphoneDecibels },
+                        set: { model.setMicrophoneLevelDecibels($0) }
+                    )
+                )
+            }
+            .frame(width: SetupLayout.actionColumnWidth, alignment: .trailing)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.38), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct AudioLevelSliderRow: View {
+    let title: String
+    let systemImage: String
+    let peak: Float
+    @Binding var decibels: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .frame(width: 20)
+                    .foregroundStyle(.secondary)
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .frame(width: 72, alignment: .leading)
+                Slider(
+                    value: $decibels,
+                    in: AudioLevelSettings.minimumDecibels...AudioLevelSettings.maximumDecibels,
+                    step: 1.0
+                )
+                .frame(width: 166)
+                Text(formattedDecibels)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 62, alignment: .trailing)
+            }
+            HStack(spacing: 10) {
+                Color.clear
+                    .frame(width: 102, height: 1)
+                SourceLevelMeterView(peak: peak)
+                    .frame(width: 166, height: 6)
+                Text(SourceLevelMeterScale.formattedDecibels(peak))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 62, alignment: .trailing)
+            }
+        }
+    }
+
+    private var formattedDecibels: String {
+        if decibels > 0 {
+            return "+\(Int(decibels)) dB"
+        }
+        return "\(Int(decibels)) dB"
+    }
+}
+
+private struct SourceLevelMeterView: View {
+    let peak: Float
+
+    var body: some View {
+        GeometryReader { proxy in
+            let fraction = SourceLevelMeterScale.normalizedPeak(peak)
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.primary.opacity(0.08))
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(SourceLevelMeterScale.color(for: peak))
+                    .frame(width: proxy.size.width * fraction)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private enum SourceLevelMeterScale {
+    static let floorDecibels = -60.0
+
+    static func decibels(_ peak: Float) -> Double {
+        guard peak.isFinite, peak > 0 else {
+            return floorDecibels
+        }
+        return max(floorDecibels, 20.0 * log10(Double(peak)))
+    }
+
+    static func normalizedPeak(_ peak: Float) -> CGFloat {
+        let value = (decibels(peak) - floorDecibels) / abs(floorDecibels)
+        return CGFloat(min(max(value, 0.0), 1.0))
+    }
+
+    static func formattedDecibels(_ peak: Float) -> String {
+        let value = decibels(peak)
+        if value <= floorDecibels {
+            return "-60 dBFS"
+        }
+        if value > 0 {
+            return "+\(Int(round(value))) dBFS"
+        }
+        return "\(Int(round(value))) dBFS"
+    }
+
+    static func color(for peak: Float) -> Color {
+        let value = decibels(peak)
+        if value >= -3.0 {
+            return .red
+        }
+        if value >= -12.0 {
+            return .yellow
+        }
+        return .green
     }
 }
 

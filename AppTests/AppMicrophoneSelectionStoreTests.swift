@@ -6,6 +6,7 @@ struct AppMicrophoneSelectionStoreTests {
         testPriorityOrderDoesNotOverwriteSelectedMicrophone()
         testLegacySelectedMicrophoneSeedsPriorityWhenPriorityIsMissing()
         testAppAudioSelectionPersistsModeAndBundleIDs()
+        testAudioLevelSettingsPersistClampedDecibels()
         print("microphone selection store tests passed")
     }
 
@@ -41,6 +42,24 @@ struct AppMicrophoneSelectionStoreTests {
 
         assertEqual(reloaded.captureMode, .selectedApps)
         assertEqual(reloaded.selectedAppBundleIDs, ["com.apple.Music", "com.tinyspeck.slackmacgap"])
+    }
+
+    private static func testAudioLevelSettingsPersistClampedDecibels() {
+        let defaults = isolatedDefaults()
+        let store = AppAudioLevelSettingsStore(defaults: defaults)
+
+        store.settings = AudioLevelSettings(
+            systemDecibels: -40.0,
+            microphoneDecibels: 18.0,
+            enhanceVoice: false
+        )
+
+        let reloaded = AppAudioLevelSettingsStore(defaults: defaults)
+        assertEqual(reloaded.settings.systemDecibels, AudioLevelSettings.minimumDecibels)
+        assertEqual(reloaded.settings.microphoneDecibels, AudioLevelSettings.maximumDecibels)
+        assertEqual(reloaded.settings.enhanceVoice, false)
+        assertEqual(reloaded.settings.systemGain, Float(pow(10.0, AudioLevelSettings.minimumDecibels / 20.0)))
+        assertEqual(reloaded.settings.microphoneGain, Float(pow(10.0, AudioLevelSettings.maximumDecibels / 20.0)))
     }
 
     private static func isolatedDefaults() -> UserDefaults {

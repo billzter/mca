@@ -11,6 +11,7 @@ final class AppStatusModel: ObservableObject {
     private let microphoneSelectionStore: MicrophoneSelectionStoring
     private let appAudioSourceCatalog: AppAudioSourceCataloging
     private let appAudioSelectionStore: AppAudioSelectionStoring
+    private let audioLevelSettingsStore: AudioLevelSettingsStoring
     private let systemAudioAccessStore: SystemAudioAccessStoring
     private let launchAtStartupController: LaunchAtStartupControlling
 
@@ -35,6 +36,7 @@ final class AppStatusModel: ObservableObject {
     @Published var appAudioSourceItems: [AppAudioSourceItem] = []
     @Published var selectedAppAudioSourceItems: [AppAudioSourceItem] = []
     @Published var selectedAppBundleIDs: [String] = []
+    @Published var audioLevelSettings: AudioLevelSettings
     @Published var lastHealthSnapshot: HealthSnapshot = .empty
     @Published var sharedRingStats: SharedRingStats = .empty
     @Published var launchAtStartupStatus: LaunchAtStartupStatus = .unknown
@@ -58,6 +60,7 @@ final class AppStatusModel: ObservableObject {
         microphoneSelectionStore: MicrophoneSelectionStoring = VolatileMicrophoneSelectionStore(),
         appAudioSourceCatalog: AppAudioSourceCataloging = EmptyAppAudioSourceCatalog(),
         appAudioSelectionStore: AppAudioSelectionStoring = VolatileAppAudioSelectionStore(),
+        audioLevelSettingsStore: AudioLevelSettingsStoring = VolatileAudioLevelSettingsStore(),
         systemAudioAccessStore: SystemAudioAccessStoring = VolatileSystemAudioAccessStore(),
         launchAtStartupController: LaunchAtStartupControlling = NullLaunchAtStartupController()
     ) {
@@ -69,10 +72,12 @@ final class AppStatusModel: ObservableObject {
         self.microphoneSelectionStore = microphoneSelectionStore
         self.appAudioSourceCatalog = appAudioSourceCatalog
         self.appAudioSelectionStore = appAudioSelectionStore
+        self.audioLevelSettingsStore = audioLevelSettingsStore
         self.systemAudioAccessStore = systemAudioAccessStore
         self.launchAtStartupController = launchAtStartupController
         captureMode = appAudioSelectionStore.captureMode
         selectedAppBundleIDs = appAudioSelectionStore.selectedAppBundleIDs
+        audioLevelSettings = audioLevelSettingsStore.settings
         refreshAppAudioSources()
         if systemAudioAccessStore.hasVerifiedSystemAudioAccess {
             systemAudioAccess = .proceedUnverified
@@ -330,6 +335,36 @@ final class AppStatusModel: ObservableObject {
         pendingSelectedAppRestoreFallbacks.removeAll(keepingCapacity: true)
         sessionState = resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup)
         reconcileLiveMixer()
+    }
+
+    func setSystemAudioLevelDecibels(_ decibels: Double) {
+        updateAudioLevelSettings(
+            AudioLevelSettings(
+                systemDecibels: decibels,
+                microphoneDecibels: audioLevelSettings.microphoneDecibels,
+                enhanceVoice: audioLevelSettings.enhanceVoice
+            )
+        )
+    }
+
+    func setMicrophoneLevelDecibels(_ decibels: Double) {
+        updateAudioLevelSettings(
+            AudioLevelSettings(
+                systemDecibels: audioLevelSettings.systemDecibels,
+                microphoneDecibels: decibels,
+                enhanceVoice: audioLevelSettings.enhanceVoice
+            )
+        )
+    }
+
+    func setEnhanceVoice(_ isEnabled: Bool) {
+        updateAudioLevelSettings(
+            AudioLevelSettings(
+                systemDecibels: audioLevelSettings.systemDecibels,
+                microphoneDecibels: audioLevelSettings.microphoneDecibels,
+                enhanceVoice: isEnabled
+            )
+        )
     }
 
     func moveMicrophonePriority(id: String, direction: MicrophonePriorityMoveDirection) {
@@ -836,6 +871,7 @@ final class AppStatusModel: ObservableObject {
         pendingMixerConfiguration = configuration
         liveMixerState = .starting
 
+        liveMixerController.setAudioLevels(audioLevelSettings)
         liveMixerController.start(configuration: configuration) { [weak self] result in
             self?.completeLiveMixerStart(
                 generation: generation,
@@ -858,6 +894,7 @@ final class AppStatusModel: ObservableObject {
         case .started:
             runningMixerConfiguration = configuration
             liveMixerState = .running
+            liveMixerController.setAudioLevels(audioLevelSettings)
         case .failed:
             runningMixerConfiguration = nil
             liveMixerState = .failed
@@ -891,6 +928,12 @@ final class AppStatusModel: ObservableObject {
             activeMicrophoneID
         }
     }
+
+    private func updateAudioLevelSettings(_ settings: AudioLevelSettings) {
+        audioLevelSettings = settings
+        audioLevelSettingsStore.settings = settings
+        liveMixerController.setAudioLevels(settings)
+    }
 }
 
 private final class NullLiveMixerController: LiveMixerControlling {
@@ -910,7 +953,15 @@ private final class NullLiveMixerController: LiveMixerControlling {
         completion()
     }
 
+    @MainActor func setAudioLevels(_ settings: AudioLevelSettings) {
+        _ = settings
+    }
+
     @MainActor func currentHealthSnapshot() -> HealthSnapshot? {
+        nil
+    }
+
+    @MainActor func currentSourceLevelSnapshot() -> SourceLevelMeterSnapshot? {
         nil
     }
 
@@ -939,6 +990,10 @@ private final class VolatileMicrophoneSelectionStore: MicrophoneSelectionStoring
 private final class VolatileAppAudioSelectionStore: AppAudioSelectionStoring {
     var captureMode: ProgramAudioCaptureMode = .globalSystemAudio
     var selectedAppBundleIDs: [String] = []
+}
+
+private final class VolatileAudioLevelSettingsStore: AudioLevelSettingsStoring {
+    var settings = AudioLevelSettings()
 }
 
 private final class VolatileSystemAudioAccessStore: SystemAudioAccessStoring {

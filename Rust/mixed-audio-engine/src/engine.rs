@@ -7,6 +7,9 @@ use std::slice;
 // validating inputs and keeping the implementation's normal error paths panic-free.
 pub const MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE: u32 = 48_000;
 pub const MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS: u32 = 2;
+const MIXED_AUDIO_ENGINE_MAX_SOURCE_GAIN: f32 = 16.0;
+const MIN_DETECTOR_LEVEL: f32 = 0.000_000_001;
+const SOFT_LIMIT_THRESHOLD: f32 = 0.95;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -16,6 +19,14 @@ pub struct MixedAudioEngineConfig {
     pub max_drift_correction_per_mix: u32,
     pub system_gain: f32,
     pub mic_gain: f32,
+    pub mic_compression_enabled: u32,
+    pub mic_compression_threshold_db: f32,
+    pub mic_compression_ratio: f32,
+    pub mic_compression_attack_ms: f32,
+    pub mic_compression_release_ms: f32,
+    pub mic_compression_makeup_db: f32,
+    pub mic_gate_threshold_db: f32,
+    pub mic_gate_attenuation_db: f32,
 }
 
 impl Default for MixedAudioEngineConfig {
@@ -26,6 +37,14 @@ impl Default for MixedAudioEngineConfig {
             max_drift_correction_per_mix: 8,
             system_gain: 1.0,
             mic_gain: 1.0,
+            mic_compression_enabled: 0,
+            mic_compression_threshold_db: -24.0,
+            mic_compression_ratio: 3.0,
+            mic_compression_attack_ms: 8.0,
+            mic_compression_release_ms: 200.0,
+            mic_compression_makeup_db: 6.0,
+            mic_gate_threshold_db: -50.0,
+            mic_gate_attenuation_db: -24.0,
         }
     }
 }
@@ -69,6 +88,25 @@ type EngineResult<T> = Result<T, EngineError>;
 struct StereoFrame {
     left: f32,
     right: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SourceLevels {
+    pub system_peak: f32,
+    pub mic_peak: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct MicDynamics {
+    enabled: bool,
+    threshold_db: f32,
+    ratio: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
+    threshold_lin: f32,
+    makeup_lin: f32,
+    gate_threshold_lin: f32,
+    gate_attenuation_lin: f32,
 }
 
 #[derive(Debug)]
@@ -128,6 +166,9 @@ pub struct Engine {
     system: RingBuffer<StereoFrame>,
     mic: RingBuffer<f32>,
     health: MixedAudioEngineHealth,
+    mic_dynamics: MicDynamics,
+    mic_comp_envelope: f32,
+    source_levels: SourceLevels,
 }
 
 impl Engine {
@@ -135,18 +176,22 @@ impl Engine {
         if config.source_capacity_frames == 0
             || config.max_source_skew_frames > config.source_capacity_frames
             || config.max_drift_correction_per_mix == 0
-            || !config.system_gain.is_finite()
-            || !config.mic_gain.is_finite()
+            || !Self::levels_are_valid(config.system_gain, config.mic_gain)
+            || !Self::compression_config_is_valid(config)
         {
             return Err(EngineError::InvalidConfig);
         }
 
         let capacity = config.source_capacity_frames as usize;
+        let mic_dynamics = Self::mic_dynamics_from_config(config);
         Ok(Self {
             config,
             system: RingBuffer::new(capacity)?,
             mic: RingBuffer::new(capacity)?,
             health: MixedAudioEngineHealth::default(),
+            mic_dynamics,
+            mic_comp_envelope: 0.0,
+            source_levels: SourceLevels::default(),
         })
     }
 
@@ -211,10 +256,14 @@ impl Engine {
                 }
             };
 
-            let left = (system.left * self.config.system_gain) + (mic * self.config.mic_gain);
-            let right = (system.right * self.config.system_gain) + (mic * self.config.mic_gain);
-            output[frame * 2] = self.clamp_sample(left);
-            output[frame * 2 + 1] = self.clamp_sample(right);
+            let system_left = system.left * self.config.system_gain;
+            let system_right = system.right * self.config.system_gain;
+            let mic = self.process_mic_sample(mic) * self.config.mic_gain;
+            self.record_source_levels(system_left, system_right, mic);
+            let left = system_left + mic;
+            let right = system_right + mic;
+            output[frame * 2] = self.limit_sample(left);
+            output[frame * 2 + 1] = self.limit_sample(right);
         }
 
         self.health.frames_mixed += requested_frames as u64;
@@ -226,9 +275,35 @@ impl Engine {
         self.health
     }
 
+    pub fn take_source_levels(&mut self) -> SourceLevels {
+        let levels = self.source_levels;
+        self.source_levels = SourceLevels::default();
+        levels
+    }
+
+    pub fn set_levels(&mut self, system_gain: f32, mic_gain: f32) -> EngineResult<()> {
+        if !Self::levels_are_valid(system_gain, mic_gain) {
+            return Err(EngineError::InvalidConfig);
+        }
+        self.config.system_gain = system_gain;
+        self.config.mic_gain = mic_gain;
+        Ok(())
+    }
+
+    pub fn set_mic_compression_enabled(&mut self, enabled: bool) -> EngineResult<()> {
+        self.config.mic_compression_enabled = u32::from(enabled);
+        if !Self::compression_config_is_valid(self.config) {
+            return Err(EngineError::InvalidConfig);
+        }
+        self.mic_dynamics = Self::mic_dynamics_from_config(self.config);
+        self.mic_comp_envelope = 0.0;
+        Ok(())
+    }
+
     pub fn reset_sources(&mut self) {
         self.system.clear();
         self.mic.clear();
+        self.mic_comp_envelope = 0.0;
         self.refresh_queue_health();
     }
 
@@ -236,16 +311,117 @@ impl Engine {
         self.health.callback_error_count += 1;
     }
 
-    fn clamp_sample(&mut self, sample: f32) -> f32 {
-        if sample > 1.0 {
-            self.health.clipped_samples += 1;
-            1.0
-        } else if sample < -1.0 {
-            self.health.clipped_samples += 1;
-            -1.0
-        } else {
-            sample
+    fn record_source_levels(&mut self, system_left: f32, system_right: f32, mic: f32) {
+        let system_peak = system_left.abs().max(system_right.abs());
+        if system_peak.is_finite() {
+            self.source_levels.system_peak = self.source_levels.system_peak.max(system_peak);
         }
+        let mic_peak = mic.abs();
+        if mic_peak.is_finite() {
+            self.source_levels.mic_peak = self.source_levels.mic_peak.max(mic_peak);
+        }
+    }
+
+    fn limit_sample(&mut self, sample: f32) -> f32 {
+        if !sample.is_finite() {
+            self.health.clipped_samples += 1;
+            if sample.is_nan() {
+                return 0.0;
+            }
+            return if sample.is_sign_negative() { -1.0 } else { 1.0 };
+        }
+
+        let abs_sample = sample.abs();
+        if abs_sample > 1.0 {
+            self.health.clipped_samples += 1;
+        }
+        if abs_sample <= SOFT_LIMIT_THRESHOLD {
+            return sample;
+        }
+
+        let limited = self.soft_limit_positive(abs_sample);
+        limited.copysign(sample)
+    }
+
+    fn soft_limit_positive(&self, sample: f32) -> f32 {
+        let range = 1.0 - SOFT_LIMIT_THRESHOLD;
+        let over = sample - SOFT_LIMIT_THRESHOLD;
+        SOFT_LIMIT_THRESHOLD + (range * (over / (over + range)))
+    }
+
+    fn levels_are_valid(system_gain: f32, mic_gain: f32) -> bool {
+        system_gain.is_finite()
+            && mic_gain.is_finite()
+            && (0.0..=MIXED_AUDIO_ENGINE_MAX_SOURCE_GAIN).contains(&system_gain)
+            && (0.0..=MIXED_AUDIO_ENGINE_MAX_SOURCE_GAIN).contains(&mic_gain)
+    }
+
+    fn compression_config_is_valid(config: MixedAudioEngineConfig) -> bool {
+        (config.mic_compression_enabled == 0 || config.mic_compression_enabled == 1)
+            && config.mic_compression_threshold_db.is_finite()
+            && config.mic_compression_threshold_db <= 0.0
+            && config.mic_compression_ratio.is_finite()
+            && config.mic_compression_ratio >= 1.0
+            && config.mic_compression_attack_ms.is_finite()
+            && config.mic_compression_attack_ms > 0.0
+            && config.mic_compression_release_ms.is_finite()
+            && config.mic_compression_release_ms > 0.0
+            && config.mic_compression_makeup_db.is_finite()
+            && (-24.0..=24.0).contains(&config.mic_compression_makeup_db)
+            && config.mic_gate_threshold_db.is_finite()
+            && config.mic_gate_threshold_db <= 0.0
+            && config.mic_gate_attenuation_db.is_finite()
+            && (-120.0..=0.0).contains(&config.mic_gate_attenuation_db)
+    }
+
+    fn mic_dynamics_from_config(config: MixedAudioEngineConfig) -> MicDynamics {
+        MicDynamics {
+            enabled: config.mic_compression_enabled != 0,
+            threshold_db: config.mic_compression_threshold_db,
+            ratio: config.mic_compression_ratio,
+            attack_coeff: Self::time_coefficient(config.mic_compression_attack_ms),
+            release_coeff: Self::time_coefficient(config.mic_compression_release_ms),
+            threshold_lin: Self::db_to_linear(config.mic_compression_threshold_db),
+            makeup_lin: Self::db_to_linear(config.mic_compression_makeup_db),
+            gate_threshold_lin: Self::db_to_linear(config.mic_gate_threshold_db),
+            gate_attenuation_lin: Self::db_to_linear(config.mic_gate_attenuation_db),
+        }
+    }
+
+    fn time_coefficient(time_ms: f32) -> f32 {
+        (-1.0 / (time_ms * 0.001 * MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE as f32)).exp()
+    }
+
+    fn db_to_linear(db: f32) -> f32 {
+        10.0_f32.powf(db / 20.0)
+    }
+
+    fn process_mic_sample(&mut self, sample: f32) -> f32 {
+        let dynamics = self.mic_dynamics;
+        if !dynamics.enabled {
+            return sample;
+        }
+
+        let level = sample.abs();
+        let coeff = if level > self.mic_comp_envelope {
+            dynamics.attack_coeff
+        } else {
+            dynamics.release_coeff
+        };
+        self.mic_comp_envelope = (coeff * self.mic_comp_envelope) + ((1.0 - coeff) * level);
+
+        let mut gain = 1.0;
+        if self.mic_comp_envelope > dynamics.threshold_lin {
+            let envelope_db = 20.0 * self.mic_comp_envelope.max(MIN_DETECTOR_LEVEL).log10();
+            let over_db = envelope_db - dynamics.threshold_db;
+            let reduce_db = over_db * (1.0 - (1.0 / dynamics.ratio));
+            gain *= Self::db_to_linear(-reduce_db);
+        }
+        if self.mic_comp_envelope < dynamics.gate_threshold_lin {
+            gain *= dynamics.gate_attenuation_lin;
+        }
+
+        sample * gain * dynamics.makeup_lin
     }
 
     fn bound_source_skew(&mut self) {
@@ -387,6 +563,30 @@ pub unsafe extern "C" fn mixed_audio_engine_mix_available(
         result_frames(engine.mix_available(frames, output))
     }))
     .unwrap_or(0)
+}
+
+#[no_mangle]
+/// Updates source gains for subsequent mixes without resetting queued audio or health counters.
+///
+/// # Safety
+///
+/// `handle` must be a live engine pointer.
+pub unsafe extern "C" fn mixed_audio_engine_set_levels(
+    handle: *mut MixedAudioEngineHandle,
+    system_gain: f32,
+    mic_gain: f32,
+) -> i32 {
+    if handle.is_null() {
+        return -1;
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        let engine = &mut (*handle).engine;
+        engine
+            .set_levels(system_gain, mic_gain)
+            .map(|_| 0)
+            .unwrap_or(-1)
+    }))
+    .unwrap_or(-1)
 }
 
 #[no_mangle]

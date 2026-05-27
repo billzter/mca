@@ -69,6 +69,8 @@ swiftc \
   App/Sources/App/SystemAudioAccessTester.swift \
   App/Sources/App/LaunchAtStartupController.swift \
   App/Sources/App/DebouncedMainActorAction.swift \
+  App/Sources/App/SourceLevelMeterModel.swift \
+  App/Sources/App/SourceLevelMeterPollingController.swift \
   App/Sources/App/AppLiveMixerController.swift \
   App/Sources/App/AppStatusModel.swift \
   App/Sources/App/AppServices.swift \
