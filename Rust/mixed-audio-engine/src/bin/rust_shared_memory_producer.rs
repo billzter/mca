@@ -37,6 +37,14 @@ fn run() -> Result<(), String> {
         max_drift_correction_per_mix: 8,
         system_gain: 1.0,
         mic_gain: 0.0,
+        mic_compression_enabled: 0,
+        mic_compression_threshold_db: -24.0,
+        mic_compression_ratio: 3.0,
+        mic_compression_attack_ms: 8.0,
+        mic_compression_release_ms: 200.0,
+        mic_compression_makeup_db: 6.0,
+        mic_gate_threshold_db: -50.0,
+        mic_gate_attenuation_db: -24.0,
     };
     let session_config = MixedAudioSessionConfig {
         engine: config,

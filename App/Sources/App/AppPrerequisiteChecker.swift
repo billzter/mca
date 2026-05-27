@@ -187,6 +187,56 @@ final class AppAudioSelectionStore: AppAudioSelectionStoring {
     }
 }
 
+final class AppAudioLevelSettingsStore: AudioLevelSettingsStoring {
+    private let defaults: UserDefaults
+    private let systemDecibelsKey = "audioLevelSystemDecibels"
+    private let microphoneDecibelsKey = "audioLevelMicrophoneDecibels"
+    private let enhanceVoiceKey = "audioLevelEnhanceVoice"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    var settings: AudioLevelSettings {
+        get {
+            AudioLevelSettings(
+                systemDecibels: storedDecibels(
+                    forKey: systemDecibelsKey,
+                    defaultValue: AudioLevelSettings.defaultSystemDecibels
+                ),
+                microphoneDecibels: storedDecibels(
+                    forKey: microphoneDecibelsKey,
+                    defaultValue: AudioLevelSettings.defaultMicrophoneDecibels
+                ),
+                enhanceVoice: storedBool(
+                    forKey: enhanceVoiceKey,
+                    defaultValue: AudioLevelSettings.defaultEnhanceVoice
+                )
+            )
+        }
+        set {
+            defaults.set(newValue.systemDecibels, forKey: systemDecibelsKey)
+            defaults.set(newValue.microphoneDecibels, forKey: microphoneDecibelsKey)
+            defaults.set(newValue.enhanceVoice, forKey: enhanceVoiceKey)
+        }
+    }
+
+    private func storedDecibels(forKey key: String, defaultValue: Double) -> Double {
+        guard defaults.object(forKey: key) != nil else {
+            return defaultValue
+        }
+        let value = defaults.double(forKey: key)
+        return value.isFinite ? value : defaultValue
+    }
+
+    private func storedBool(forKey key: String, defaultValue: Bool) -> Bool {
+        guard defaults.object(forKey: key) != nil else {
+            return defaultValue
+        }
+        return defaults.bool(forKey: key)
+    }
+}
+
 final class AppSystemAudioAccessStore: SystemAudioAccessStoring {
     private let defaults: UserDefaults
     private let key = "hasVerifiedSystemAudioAccess"

@@ -35,6 +35,24 @@ swiftc \
   -module-cache-path Build/ModuleCache \
   App/Sources/Diagnostics/HealthDiagnostics.swift \
   App/Sources/App/PrerequisiteStatus.swift \
+  App/Sources/App/SourceLevelMeterModel.swift \
+  AppTests/SourceLevelMeterModelTests.swift \
+  -o Build/Debug/Tests/SourceLevelMeterModelTests
+
+Build/Debug/Tests/SourceLevelMeterModelTests
+
+swiftc \
+  -module-cache-path Build/ModuleCache \
+  App/Sources/App/SourceLevelMeterPollingController.swift \
+  AppTests/SourceLevelMeterPollingControllerTests.swift \
+  -o Build/Debug/Tests/SourceLevelMeterPollingControllerTests
+
+Build/Debug/Tests/SourceLevelMeterPollingControllerTests
+
+swiftc \
+  -module-cache-path Build/ModuleCache \
+  App/Sources/Diagnostics/HealthDiagnostics.swift \
+  App/Sources/App/PrerequisiteStatus.swift \
   App/Sources/App/AppPrerequisiteChecker.swift \
   App/Sources/App/AppStatusModel.swift \
   AppTests/AppStatusModelTests.swift \

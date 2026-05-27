@@ -48,6 +48,7 @@ struct AppStatusModelTests {
         await testReorderingInactiveMicrophonesDoesNotRestartMixer()
         await testDeferredPriorityReorderSeparatesVisualMoveFromMixerRestart()
         await testMicrophonePriorityIgnoresInternalLiveMixerDevices()
+        await testChangingAudioLevelsUpdatesLiveMixerWithoutRestart()
         await testLiveHealthRefreshPublishesControllerSnapshot()
         await testLiveHealthRefreshShowsRecorderActiveWhenVirtualDeviceIsRunning()
         await testLiveHealthRefreshClearsWhenControllerHasNoSnapshot()
@@ -1359,6 +1360,35 @@ struct AppStatusModelTests {
         assertEqual(model.activeMicrophoneID, "built-in")
     }
 
+    private static func testChangingAudioLevelsUpdatesLiveMixerWithoutRestart() async {
+        let controller = FakeLiveMixerController()
+        let audioLevelStore = InMemoryAudioLevelSettingsStore(
+            settings: AudioLevelSettings(systemDecibels: -6.0, microphoneDecibels: 6.0)
+        )
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            audioLevelSettingsStore: audioLevelStore,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshPrerequisites()
+        let startsAfterRefresh = controller.startCount
+
+        model.setMicrophoneLevelDecibels(18.0)
+        model.setEnhanceVoice(false)
+
+        assertEqual(controller.startCount, startsAfterRefresh)
+        assertEqual(controller.stopCount, 0)
+        assertEqual(controller.setAudioLevelCount, 4)
+        assertEqual(controller.lastAudioLevelSettings?.microphoneDecibels, AudioLevelSettings.maximumDecibels)
+        assertEqual(controller.lastAudioLevelSettings?.enhanceVoice, false)
+        assertEqual(audioLevelStore.settings.microphoneDecibels, AudioLevelSettings.maximumDecibels)
+        assertEqual(audioLevelStore.settings.enhanceVoice, false)
+    }
+
     private static func readyChecker() -> FakePrerequisiteChecker {
         FakePrerequisiteChecker(snapshots: [readySnapshot()])
     }
@@ -1579,11 +1609,14 @@ private final class FakeLiveMixerController: LiveMixerControlling {
     private let automaticallyComplete: Bool
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private(set) var setAudioLevelCount = 0
     private(set) var lastStartedMicrophoneID: String?
     private(set) var lastStartedConfiguration: LiveMixerStartConfiguration?
+    private(set) var lastAudioLevelSettings: AudioLevelSettings?
     var supportsSelectedAppProcessRestore = false
     var startResult: LiveMixerStartResult = .started
     var healthSnapshot: HealthSnapshot?
+    var sourceLevelSnapshot: SourceLevelMeterSnapshot?
     var virtualAudioDeviceRunning = false
     private var isRunning = false
     private var startCompletions: [@MainActor (LiveMixerStartResult) -> Void] = []
@@ -1621,8 +1654,17 @@ private final class FakeLiveMixerController: LiveMixerControlling {
         }
     }
 
+    @MainActor func setAudioLevels(_ settings: AudioLevelSettings) {
+        setAudioLevelCount += 1
+        lastAudioLevelSettings = settings
+    }
+
     @MainActor func currentHealthSnapshot() -> HealthSnapshot? {
         healthSnapshot
+    }
+
+    @MainActor func currentSourceLevelSnapshot() -> SourceLevelMeterSnapshot? {
+        sourceLevelSnapshot
     }
 
     @MainActor func isVirtualAudioDeviceRunning() -> Bool {
@@ -1717,6 +1759,14 @@ private final class InMemoryMicrophoneSelectionStore: MicrophoneSelectionStoring
 private final class InMemoryAppAudioSelectionStore: AppAudioSelectionStoring {
     var captureMode: ProgramAudioCaptureMode = .globalSystemAudio
     var selectedAppBundleIDs: [String] = []
+}
+
+private final class InMemoryAudioLevelSettingsStore: AudioLevelSettingsStoring {
+    var settings: AudioLevelSettings
+
+    init(settings: AudioLevelSettings = AudioLevelSettings()) {
+        self.settings = settings
+    }
 }
 
 private final class InMemorySystemAudioAccessStore: SystemAudioAccessStoring {

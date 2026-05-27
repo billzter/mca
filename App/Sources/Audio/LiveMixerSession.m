@@ -5,6 +5,7 @@
 #import <Foundation/Foundation.h>
 
 #include <pthread.h>
+#include <math.h>
 #include <mach/mach_time.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,6 +19,10 @@
 #include "LiveMixerABI.h"
 
 static const useconds_t kMCAAggregateTapSettleMicros = 300000;
+static const float kMCADefaultSystemGain = 0.501187205f;
+static const float kMCADefaultMicGain = 1.995262265f;
+static const float kMCAMaxSourceGain = 16.0f;
+static const bool kMCADefaultEnhanceVoice = true;
 
 enum {
     kMCAOutputSampleRate = 48000,
@@ -50,6 +55,15 @@ typedef struct MCALiveMixerContext {
     atomic_bool resetSourcesRequested;
     atomic_uint_fast32_t bridgeSilenceFramesRequested;
     atomic_uint_fast32_t graphFadeInFramesRemaining;
+    atomic_uint_fast32_t stagedLevelGeneration;
+    atomic_uint_fast32_t appliedLevelGeneration;
+    atomic_uint_fast32_t stagedSystemGainBits;
+    atomic_uint_fast32_t stagedMicGainBits;
+    atomic_bool stagedEnhanceVoice;
+    atomic_uint_fast32_t stagedCompressionGeneration;
+    atomic_uint_fast32_t appliedCompressionGeneration;
+    atomic_uint_fast32_t meterSystemPeakBits;
+    atomic_uint_fast32_t meterMicPeakBits;
     bool running;
     AudioObjectID tapID;
     AudioObjectID aggregateID;
@@ -101,6 +115,64 @@ static pthread_once_t gMixerOnce = PTHREAD_ONCE_INIT;
 static const char *kMCANoMicrophoneUID = "__MCA_NO_MIC__";
 
 static void *MCAMixerOwnerThreadMain(void *userData);
+
+static uint_fast32_t MCAFloatBits(float value)
+{
+    uint32_t bits = 0;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+static float MCAFloatFromBits(uint_fast32_t bits)
+{
+    uint32_t narrowed = (uint32_t)bits;
+    float value = 0.0f;
+    memcpy(&value, &narrowed, sizeof(value));
+    return value;
+}
+
+static bool MCALevelsAreValid(float systemGain, float micGain)
+{
+    return isfinite(systemGain) &&
+        isfinite(micGain) &&
+        systemGain >= 0.0f &&
+        micGain >= 0.0f &&
+        systemGain <= kMCAMaxSourceGain &&
+        micGain <= kMCAMaxSourceGain;
+}
+
+static void MCAStorePeakMax(atomic_uint_fast32_t *peakBits, float peak)
+{
+    if (peakBits == NULL || !isfinite(peak) || peak <= 0.0f) {
+        return;
+    }
+
+    uint_fast32_t currentBits = atomic_load_explicit(peakBits, memory_order_acquire);
+    while (true) {
+        float currentPeak = MCAFloatFromBits(currentBits);
+        if (currentPeak >= peak) {
+            return;
+        }
+        uint_fast32_t nextBits = MCAFloatBits(peak);
+        if (atomic_compare_exchange_weak_explicit(peakBits,
+                                                  &currentBits,
+                                                  nextBits,
+                                                  memory_order_acq_rel,
+                                                  memory_order_acquire)) {
+            return;
+        }
+    }
+}
+
+static void MCAResetMeterPeaks(MCALiveMixerContext *context)
+{
+    if (context == NULL) {
+        return;
+    }
+
+    atomic_store_explicit(&context->meterSystemPeakBits, MCAFloatBits(0.0f), memory_order_release);
+    atomic_store_explicit(&context->meterMicPeakBits, MCAFloatBits(0.0f), memory_order_release);
+}
 
 static uint64_t MCAMachTicksForAudioFrames(UInt32 frames)
 {
@@ -250,6 +322,20 @@ static void MCAInitMixer(void)
                                 1);
     gMixer.tapID = kAudioObjectUnknown;
     gMixer.aggregateID = kAudioObjectUnknown;
+    atomic_store_explicit(&gMixer.stagedSystemGainBits,
+                          MCAFloatBits(kMCADefaultSystemGain),
+                          memory_order_release);
+    atomic_store_explicit(&gMixer.stagedMicGainBits,
+                          MCAFloatBits(kMCADefaultMicGain),
+                          memory_order_release);
+    atomic_store_explicit(&gMixer.stagedLevelGeneration, 1, memory_order_release);
+    atomic_store_explicit(&gMixer.appliedLevelGeneration, 0, memory_order_release);
+    atomic_store_explicit(&gMixer.stagedEnhanceVoice,
+                          kMCADefaultEnhanceVoice,
+                          memory_order_release);
+    atomic_store_explicit(&gMixer.stagedCompressionGeneration, 1, memory_order_release);
+    atomic_store_explicit(&gMixer.appliedCompressionGeneration, 0, memory_order_release);
+    MCAResetMeterPeaks(&gMixer);
 }
 
 static NSString *MCAStringKey(const char *key)
@@ -458,15 +544,28 @@ static bool MCASetAggregateTapList(AudioObjectID aggregateID, NSString *tapUID)
     return status == noErr;
 }
 
-static MixedAudioSessionHandle *MCACreateRustSession(void)
+static MixedAudioSessionHandle *MCACreateRustSession(MCALiveMixerContext *context)
 {
     MixedAudioSessionConfig config;
     memset(&config, 0, sizeof(config));
     config.engine.source_capacity_frames = kMCASharedMemoryCapacityFrames;
     config.engine.max_source_skew_frames = MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES;
     config.engine.max_drift_correction_per_mix = 8;
-    config.engine.system_gain = 0.70f;
-    config.engine.mic_gain = 0.70f;
+    config.engine.system_gain = MCAFloatFromBits(
+        atomic_load_explicit(&context->stagedSystemGainBits, memory_order_acquire)
+    );
+    config.engine.mic_gain = MCAFloatFromBits(
+        atomic_load_explicit(&context->stagedMicGainBits, memory_order_acquire)
+    );
+    config.engine.mic_compression_enabled =
+        atomic_load_explicit(&context->stagedEnhanceVoice, memory_order_acquire) ? 1u : 0u;
+    config.engine.mic_compression_threshold_db = -24.0f;
+    config.engine.mic_compression_ratio = 3.0f;
+    config.engine.mic_compression_attack_ms = 8.0f;
+    config.engine.mic_compression_release_ms = 200.0f;
+    config.engine.mic_compression_makeup_db = 6.0f;
+    config.engine.mic_gate_threshold_db = -50.0f;
+    config.engine.mic_gate_attenuation_db = -24.0f;
     config.shared_memory_capacity_frames = kMCASharedMemoryCapacityFrames;
     config.max_write_frames = kMCAMaxWriteFrames;
 
@@ -482,7 +581,7 @@ static bool MCAEnsureRustSession(MCALiveMixerContext *context)
     }
     pthread_mutex_unlock(&context->mutex);
 
-    MixedAudioSessionHandle *session = MCACreateRustSession();
+    MixedAudioSessionHandle *session = MCACreateRustSession(context);
     if (session == NULL) {
         return false;
     }
@@ -609,11 +708,77 @@ static void MCARefreshCachedHealthLocked(MCALiveMixerContext *context)
     }
 }
 
+static void MCARefreshMeterPeaksLocked(MCALiveMixerContext *context)
+{
+    if (context == NULL || context->session == NULL) {
+        return;
+    }
+
+    float systemPeak = 0.0f;
+    float micPeak = 0.0f;
+    if (mixed_audio_session_copy_levels(context->session, &systemPeak, &micPeak) == 0) {
+        MCAStorePeakMax(&context->meterSystemPeakBits, systemPeak);
+        MCAStorePeakMax(&context->meterMicPeakBits, micPeak);
+    }
+}
+
+static void MCAApplyStagedLevelsLocked(MCALiveMixerContext *context)
+{
+    if (context == NULL || context->session == NULL) {
+        return;
+    }
+
+    uint_fast32_t stagedGeneration =
+        atomic_load_explicit(&context->stagedLevelGeneration, memory_order_acquire);
+    uint_fast32_t appliedGeneration =
+        atomic_load_explicit(&context->appliedLevelGeneration, memory_order_acquire);
+    if (stagedGeneration == appliedGeneration) {
+        return;
+    }
+
+    float systemGain = MCAFloatFromBits(
+        atomic_load_explicit(&context->stagedSystemGainBits, memory_order_acquire)
+    );
+    float micGain = MCAFloatFromBits(
+        atomic_load_explicit(&context->stagedMicGainBits, memory_order_acquire)
+    );
+    if (mixed_audio_session_set_levels(context->session, systemGain, micGain) == 0) {
+        atomic_store_explicit(&context->appliedLevelGeneration,
+                              stagedGeneration,
+                              memory_order_release);
+    }
+}
+
+static void MCAApplyStagedCompressionLocked(MCALiveMixerContext *context)
+{
+    if (context == NULL || context->session == NULL) {
+        return;
+    }
+
+    uint_fast32_t stagedGeneration =
+        atomic_load_explicit(&context->stagedCompressionGeneration, memory_order_acquire);
+    uint_fast32_t appliedGeneration =
+        atomic_load_explicit(&context->appliedCompressionGeneration, memory_order_acquire);
+    if (stagedGeneration == appliedGeneration) {
+        return;
+    }
+
+    bool enabled = atomic_load_explicit(&context->stagedEnhanceVoice, memory_order_acquire);
+    if (mixed_audio_session_set_mic_compression_enabled(context->session, enabled ? 1u : 0u) == 0) {
+        atomic_store_explicit(&context->appliedCompressionGeneration,
+                              stagedGeneration,
+                              memory_order_release);
+    }
+}
+
 static void MCAMixerOwnerProcessTickLocked(MCALiveMixerContext *context)
 {
     if (context == NULL) {
         return;
     }
+
+    MCAApplyStagedLevelsLocked(context);
+    MCAApplyStagedCompressionLocked(context);
 
     uint_fast32_t bridgeFrames = atomic_load_explicit(&context->bridgeSilenceFramesRequested,
                                                      memory_order_acquire);
@@ -643,6 +808,7 @@ static void MCAMixerOwnerProcessTickLocked(MCALiveMixerContext *context)
                                                                  context->mixerSystemScratch,
                                                                  frames);
         (void)mixed_audio_session_mix_and_write(context->session, frames);
+        MCARefreshMeterPeaksLocked(context);
         MCARefreshCachedHealthLocked(context);
         return;
     }
@@ -681,6 +847,7 @@ static void MCAMixerOwnerProcessTickLocked(MCALiveMixerContext *context)
     }
 
     (void)mixed_audio_session_mix_and_write(context->session, kMCAMixerTickFrames);
+    MCARefreshMeterPeaksLocked(context);
     MCARefreshCachedHealthLocked(context);
 }
 
@@ -956,6 +1123,7 @@ static void MCACleanup(MCALiveMixerContext *context)
     atomic_store_explicit(&context->mixerActive, false, memory_order_release);
     atomic_store_explicit(&context->bridgeSilenceFramesRequested, 0, memory_order_release);
     atomic_store_explicit(&context->resetSourcesRequested, false, memory_order_release);
+    MCAResetMeterPeaks(context);
     MCAStopSourceGraph(context, false);
 }
 
@@ -1077,6 +1245,35 @@ void MCA_LiveMixerStop(void)
     MCACleanup(&gMixer);
 }
 
+int32_t MCA_LiveMixerSetLevels(float systemGain, float micGain)
+{
+    pthread_once(&gMixerOnce, MCAInitMixer);
+    if (!MCALevelsAreValid(systemGain, micGain)) {
+        return -1;
+    }
+
+    atomic_store_explicit(&gMixer.stagedSystemGainBits,
+                          MCAFloatBits(systemGain),
+                          memory_order_release);
+    atomic_store_explicit(&gMixer.stagedMicGainBits,
+                          MCAFloatBits(micGain),
+                          memory_order_release);
+    atomic_fetch_add_explicit(&gMixer.stagedLevelGeneration, 1, memory_order_acq_rel);
+    return 0;
+}
+
+int32_t MCA_LiveMixerSetVoiceEnhancement(int32_t enabled)
+{
+    pthread_once(&gMixerOnce, MCAInitMixer);
+    if (enabled != 0 && enabled != 1) {
+        return -1;
+    }
+
+    atomic_store_explicit(&gMixer.stagedEnhanceVoice, enabled != 0, memory_order_release);
+    atomic_fetch_add_explicit(&gMixer.stagedCompressionGeneration, 1, memory_order_acq_rel);
+    return 0;
+}
+
 int32_t MCA_LiveMixerSupportsSelectedAppProcessRestore(void)
 {
 #if defined(MAC_OS_VERSION_26_0)
@@ -1132,5 +1329,25 @@ int32_t MCA_LiveMixerCopyHealthCounters(uint64_t *outCounters, uint32_t counterC
         health.shared_ring_overrun_frames;
     outCounters[kMCALiveMixerHealthSystemQueueDroppedFrames] = systemQueueDroppedFrames;
     outCounters[kMCALiveMixerHealthMicQueueDroppedFrames] = micQueueDroppedFrames;
+    return 0;
+}
+
+int32_t MCA_LiveMixerCopyLevels(float *outSystemPeak, float *outMicPeak)
+{
+    if (outSystemPeak == NULL || outMicPeak == NULL) {
+        return -1;
+    }
+
+    pthread_once(&gMixerOnce, MCAInitMixer);
+    uint_fast32_t systemPeakBits =
+        atomic_exchange_explicit(&gMixer.meterSystemPeakBits,
+                                 MCAFloatBits(0.0f),
+                                 memory_order_acq_rel);
+    uint_fast32_t micPeakBits =
+        atomic_exchange_explicit(&gMixer.meterMicPeakBits,
+                                 MCAFloatBits(0.0f),
+                                 memory_order_acq_rel);
+    *outSystemPeak = MCAFloatFromBits(systemPeakBits);
+    *outMicPeak = MCAFloatFromBits(micPeakBits);
     return 0;
 }
