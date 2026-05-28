@@ -556,6 +556,15 @@ final class AppStatusModel: ObservableObject {
         apply(snapshot: snapshot)
     }
 
+    func markSystemAudioReceivingFromLiveProof() {
+        guard systemAudioAccess != .receivingAudio else {
+            systemAudioAccessStore.hasVerifiedSystemAudioAccess = true
+            return
+        }
+        systemAudioAccess = .receivingAudio
+        systemAudioAccessStore.hasVerifiedSystemAudioAccess = true
+    }
+
     private func apply(snapshot: PrerequisiteSnapshot, forceMixerRestart: Bool = false) {
         driverStatus = snapshot.driverStatus
         driverUpdateRequirement = snapshot.driverUpdateRequirement

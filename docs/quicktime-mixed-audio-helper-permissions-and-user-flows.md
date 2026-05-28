@@ -241,10 +241,11 @@ Rules:
 - `WaitingForSignal` means the capture path is running and the user should play system audio for confirmation.
 - `ReceivingAudio` means non-silent frames above the test threshold were observed during the test window.
 - `Silent` means the capture path started but only silence was observed during the test window.
-- `ProceedUnverified` means the user chose to continue setup without observed system audio.
+- `ProceedUnverified` means a prior successful system-audio check is stored, so setup can display the row as previously verified until fresh audio is observed again.
 - `DeniedOrUnavailable` means the test capture failed in a way consistent with missing permission or unavailable system audio access.
-- Verified readiness requires `ReceivingAudio`, not merely `Started`.
-- Setup may continue from `ProceedUnverified`, but diagnostics must keep system audio marked unverified until audio is observed.
+- Verified system-audio confidence requires `ReceivingAudio`, not merely `Started`.
+- Durable mixer readiness does not require live `ReceivingAudio`; it is based on installed/visible driver, microphone permission, selected microphone availability, and virtual input visibility.
+- During active recording, the app may upgrade the system-audio row to `ReceivingAudio` automatically when the virtual input is running and raw system-audio meter peaks prove non-silent computer audio.
 - Do not claim system audio `Granted` from stored preferences alone.
 
 ## Device And Session States
@@ -415,7 +416,8 @@ Check System Audio Access
 
 Continue when:
 
-- The capture path reaches at least `Started`; final readiness waits for `ReceivingAudio` in the confirmation step.
+- The capture path reaches `ReceivingAudio`.
+- Or the user continues setup with the row still unverified; durable mixer readiness is not blocked by live system-audio confidence.
 
 ### Step 5: Choose Microphone
 
@@ -442,18 +444,19 @@ Checks:
 - Start test system audio tap.
 - Show level meter.
 - If silence persists, show guidance to play audio or re-check permission.
+- During a real QuickTime/Screenshot recording, auto-confirm system audio when the virtual input is running and the raw system-audio source meter proves non-silent computer audio.
 
 UI:
 
 - System audio level meter.
 - Capture status.
 - Explicit prompt: `Play any sound to confirm system audio.`
-- Actions: `Try Again`, `Confirm Later`, `Open System Settings`.
+- Actions: `Try Again`, `Open System Settings`.
 
 Continue when:
 
 - `SystemAudioAccessStatus` is `ReceivingAudio`.
-- Or user chooses `Confirm Later`, which sets `ProceedUnverified` and keeps a visible warning.
+- Or the user continues with the system-audio row still unverified; the row remains actionable and the `Check System Audio` panel stays near the setup checklist.
 
 ### Step 7: Confirm Mixer Readiness
 
@@ -479,11 +482,9 @@ Open QuickTime Player, choose New Screen Recording, open Options, and select Mix
 Checklist:
 
 ```text
-Audio Device: Installed
+Virtual Audio Device: Installed
 Microphone: Granted
-System Audio Test: Receiving Audio
-Selected Mic: Available
-Mixer: Ready
+System Audio: Receiving Audio / Previously Verified / Not Checked
 QuickTime Device: Visible
 ```
 
@@ -513,17 +514,14 @@ Failed
 
 Minimum menu items:
 
-- Start Mixing
-- Stop Mixing
 - Open Setup
-- Open Diagnostics
-- Select Microphone
-- Open QuickTime Instructions
+- Toggle Launch at Startup
+- Check System Audio, when unverified
 - Quit
 
 When `Running`, show a visible active indicator in the menu-bar menu and setup/diagnostics window.
 
-Do not start mixing automatically on first launch. After onboarding, the app may offer a preference to start mixing at login, but it should still show visible running state.
+Do not expose start/stop session controls in the main UX. If the helper is running and durable setup is complete, the app quietly publishes the live mixed input; Quit is the user-visible stop.
 
 ## Diagnostics Checklist
 
@@ -614,15 +612,14 @@ Restart the app if macOS requires it.
 
 ## Testing Permissions
 
-Manual reset commands may include:
+Manual reset commands:
 
 ```text
 tccutil reset Microphone <bundle-id>
+tccutil reset ScreenCapture <bundle-id>
 ```
 
-System audio capture reset behavior may differ by macOS version and should be validated during implementation. The test plan should document the exact reset commands once confirmed.
-
-The exact system-audio TCC reset and re-check matrix is documented in `/tmp/quicktime-mixed-audio-helper-remaining-confirmations.md`.
+The `ScreenCapture` TCC service is the macOS bucket used by Screen & System Audio Recording.
 
 Test scenarios:
 

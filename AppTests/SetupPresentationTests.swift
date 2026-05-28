@@ -6,6 +6,12 @@ struct SetupPresentationTests {
         testSuccessfulStatusesAreComplete()
         testIncompleteStatusesRemainIncomplete()
         testUserFacingStatusLabelsAreFriendly()
+        testChecklistPresentationShowsAllRowsWhenNoneComplete()
+        testChecklistPresentationHidesCompletedRowsByDefault()
+        testChecklistPresentationCollapsesAllRowsWhenComplete()
+        testChecklistPresentationTreatsProceedUnverifiedAsComplete()
+        testChecklistPresentationShowsCompleteHeaderStatusWhenComplete()
+        testSystemAudioPanelIsPrioritizedUntilVerified()
         testReopenAfterSetupPresentationSuppressesDefaultWindow()
         testAppLifecycleDoesNotExposeSystemSettingsScene()
         testAppLifecycleUsesExplicitAppKitDelegateMain()
@@ -56,6 +62,82 @@ struct SetupPresentationTests {
         }
     }
 
+    private static func testChecklistPresentationShowsAllRowsWhenNoneComplete() {
+        let presentation = SetupChecklistPresentation(rows: [
+            checklistRow(id: .virtualAudioDevice, status: AudioDeviceStatus.missing.rawValue),
+            checklistRow(id: .microphone, status: PermissionStatus.denied.rawValue),
+            checklistRow(id: .systemAudio, status: SystemAudioAccessStatus.notTested.rawValue),
+            checklistRow(id: .quickTimeInput, status: QuickTimeDeviceStatus.notVisible.rawValue),
+        ])
+
+        assertEqual(presentation.completeCount, 0)
+        assertEqual(presentation.defaultVisibleRows.map(\.id), [
+            .virtualAudioDevice,
+            .microphone,
+            .systemAudio,
+            .quickTimeInput,
+        ])
+        assertEqual(presentation.completedRows, [])
+    }
+
+    private static func testChecklistPresentationHidesCompletedRowsByDefault() {
+        let presentation = SetupChecklistPresentation(rows: [
+            checklistRow(id: .virtualAudioDevice, status: AudioDeviceStatus.installed.rawValue),
+            checklistRow(id: .microphone, status: PermissionStatus.granted.rawValue),
+            checklistRow(id: .systemAudio, status: SystemAudioAccessStatus.notTested.rawValue),
+            checklistRow(id: .quickTimeInput, status: QuickTimeDeviceStatus.visible.rawValue),
+        ])
+
+        assertEqual(presentation.completeCount, 3)
+        assertEqual(presentation.defaultVisibleRows.map(\.id), [.systemAudio])
+        assertEqual(presentation.completedRows.map(\.id), [
+            .virtualAudioDevice,
+            .microphone,
+            .quickTimeInput,
+        ])
+    }
+
+    private static func testChecklistPresentationCollapsesAllRowsWhenComplete() {
+        let presentation = SetupChecklistPresentation(rows: [
+            checklistRow(id: .virtualAudioDevice, status: AudioDeviceStatus.installed.rawValue),
+            checklistRow(id: .microphone, status: PermissionStatus.granted.rawValue),
+            checklistRow(id: .systemAudio, status: SystemAudioAccessStatus.receivingAudio.rawValue),
+            checklistRow(id: .quickTimeInput, status: QuickTimeDeviceStatus.visible.rawValue),
+        ])
+
+        assertEqual(presentation.completeCount, 4)
+        assertEqual(presentation.defaultVisibleRows, [])
+        assertEqual(presentation.isComplete, true)
+    }
+
+    private static func testChecklistPresentationShowsCompleteHeaderStatusWhenComplete() {
+        let presentation = SetupChecklistPresentation(rows: [
+            checklistRow(id: .virtualAudioDevice, status: AudioDeviceStatus.installed.rawValue),
+            checklistRow(id: .microphone, status: PermissionStatus.granted.rawValue),
+            checklistRow(id: .systemAudio, status: SystemAudioAccessStatus.receivingAudio.rawValue),
+            checklistRow(id: .quickTimeInput, status: QuickTimeDeviceStatus.visible.rawValue),
+        ])
+
+        assertEqual(presentation.headerStatus, "Complete")
+    }
+
+    private static func testChecklistPresentationTreatsProceedUnverifiedAsComplete() {
+        let presentation = SetupChecklistPresentation(rows: [
+            checklistRow(id: .systemAudio, status: SystemAudioAccessStatus.proceedUnverified.rawValue),
+        ])
+
+        assertEqual(presentation.completeCount, 1)
+        assertEqual(presentation.defaultVisibleRows, [])
+    }
+
+    private static func testSystemAudioPanelIsPrioritizedUntilVerified() {
+        assertTrue(SetupActionPanelPlacement.prioritizesSystemAudio(.notTested))
+        assertTrue(SetupActionPanelPlacement.prioritizesSystemAudio(.silent))
+        assertTrue(SetupActionPanelPlacement.prioritizesSystemAudio(.deniedOrUnavailable))
+        assertFalse(SetupActionPanelPlacement.prioritizesSystemAudio(.receivingAudio))
+        assertFalse(SetupActionPanelPlacement.prioritizesSystemAudio(.proceedUnverified))
+    }
+
     private static func testReopenAfterSetupPresentationSuppressesDefaultWindow() {
         assertFalse(SetupWindowReopenPolicy.shouldAllowSystemDefaultWindowCreation)
     }
@@ -67,6 +149,15 @@ struct SetupPresentationTests {
     private static func testAppLifecycleUsesExplicitAppKitDelegateMain() {
         assertTrue(AppLifecyclePresentation.usesExplicitAppKitDelegateMain)
     }
+}
+
+private func checklistRow(id: SetupChecklistRowPresentation.ID, status: String) -> SetupChecklistRowPresentation {
+    SetupChecklistRowPresentation(
+        id: id,
+        title: "\(id)",
+        primary: "Primary",
+        status: status
+    )
 }
 
 private func assertTrue(_ condition: Bool, file: StaticString = #file, line: UInt = #line) {

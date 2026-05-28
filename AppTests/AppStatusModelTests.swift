@@ -8,6 +8,9 @@ struct AppStatusModelTests {
         await testDeniedMicrophoneAccessStillOffersRequestAction()
         await testSystemAudioAccessTestMapsReceivingAudioToReady()
         await testSystemAudioAccessTestMapsSilentCaptureToSilentGuidance()
+        await testLiveSystemAudioProofMarksReceivingAndPersists()
+        await testLiveSystemAudioProofIsIdempotent()
+        await testLiveSystemAudioProofDoesNotMakeDurableSetupComplete()
         await testPrerequisiteRefreshPublishesDeviceNames()
         await testPrerequisiteRefreshPublishesDriverUpdateRequirement()
         await testLiveMixerStartsWhenSystemAudioSetupIsUnverified()
@@ -192,6 +195,60 @@ struct AppStatusModelTests {
         assertEqual(model.sessionState, .ready)
         assertEqual(model.liveMixerState, .running)
         assertEqual(controller.startCount, 1)
+    }
+
+    private static func testLiveSystemAudioProofMarksReceivingAndPersists() async {
+        let store = InMemorySystemAudioAccessStore()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .silent),
+            systemAudioAccessStore: store
+        )
+
+        model.markSystemAudioReceivingFromLiveProof()
+
+        assertEqual(model.systemAudioAccess, .receivingAudio)
+        assertEqual(store.hasVerifiedSystemAudioAccess, true)
+    }
+
+    private static func testLiveSystemAudioProofIsIdempotent() async {
+        let store = InMemorySystemAudioAccessStore()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .silent),
+            systemAudioAccessStore: store
+        )
+
+        model.markSystemAudioReceivingFromLiveProof()
+        model.markSystemAudioReceivingFromLiveProof()
+
+        assertEqual(model.systemAudioAccess, .receivingAudio)
+        assertEqual(store.hasVerifiedSystemAudioAccess, true)
+    }
+
+    private static func testLiveSystemAudioProofDoesNotMakeDurableSetupComplete() async {
+        let model = AppStatusModel(
+            prerequisiteChecker: FakePrerequisiteChecker(
+                snapshots: [
+                    PrerequisiteSnapshot(
+                        driverStatus: .installed,
+                        microphonePermission: .granted,
+                        selectedMicStatus: .available,
+                        quickTimeDeviceStatus: .notVisible
+                    ),
+                ]
+            ),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .silent)
+        )
+
+        model.refreshPrerequisites()
+        model.markSystemAudioReceivingFromLiveProof()
+
+        assertEqual(model.systemAudioAccess, .receivingAudio)
+        assertEqual(model.sessionState, .stopped)
     }
 
     private static func testPrerequisiteRefreshPublishesDeviceNames() async {

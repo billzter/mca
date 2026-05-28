@@ -300,12 +300,13 @@ Coverage:
 - `PromptExpected` explains that starting the test path may trigger macOS permission UI.
 - `Started` system audio access does not count as ready until audio is observed.
 - `WaitingForSignal` prompts the user to play system audio.
-- `ReceivingAudio` is required before setup claims system audio is verified.
+- `ReceivingAudio` is required before setup claims fresh system audio has been observed.
 - `Silent` state does not automatically become ready or denied without user guidance.
-- `Confirm Later` from `WaitingForSignal` or `Silent` sets `ProceedUnverified` and keeps a visible diagnostic warning.
+- Prior stored verification may display as `ProceedUnverified`, but fresh live confidence still requires observed audio.
+- During active QuickTime/Screenshot recording, system audio can auto-verify when the virtual input is running and raw source-meter peaks prove non-silent computer audio.
 - Failed system audio test shows System Settings guidance.
 - `Check Again` refreshes states.
-- Setup does not claim fully verified readiness until required prerequisites are satisfied.
+- Durable readiness does not wait for live system-audio confidence; the system-audio row remains an onboarding/diagnostic confidence item.
 
 Manual reset command for microphone:
 
@@ -313,14 +314,18 @@ Manual reset command for microphone:
 tccutil reset Microphone <bundle-id>
 ```
 
-System audio capture reset behavior must be confirmed during implementation and added to this plan.
+Manual reset command for Screen & System Audio Recording:
+
+```text
+tccutil reset ScreenCapture <bundle-id>
+```
 
 Acceptance:
 
 - User can recover from denied permissions.
 - User can continue setup on a quiet machine without the app falsely claiming verified system audio.
 - App never starts capture invisibly.
-- App clearly distinguishes `Ready` from `Running`.
+- App clearly distinguishes durable setup readiness from live verification confidence.
 
 ### Layer 8: Install And Update Validation
 
@@ -365,14 +370,14 @@ Steps:
 
 1. Install/load `MixedCaptureAudio.driver`.
 2. Launch `MixedCaptureAudio.app`.
-3. Complete onboarding.
-4. Select a microphone.
-5. Start mixing.
-6. Open QuickTime Player.
-7. Choose New Screen Recording.
-8. Open Options.
-9. Select `Mixed Capture Audio` as microphone.
-10. Play browser/system audio.
+3. Complete durable setup.
+4. Select a microphone if needed.
+5. Open QuickTime Player.
+6. Choose New Screen Recording.
+7. Open Options.
+8. Select `Mixed Capture Audio` as microphone.
+9. Play browser/system audio.
+10. Confirm the System Audio row auto-checks while the recording client is active.
 11. Speak into selected mic.
 12. Record 30 seconds.
 13. Stop recording.

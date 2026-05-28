@@ -10,6 +10,8 @@ private enum SetupLayout {
 struct SetupView: View {
     @ObservedObject var model: AppStatusModel
     let sourceLevelMeterModel: SourceLevelMeterModel
+    @State private var checklistExpanded = false
+    @State private var completedRowsExpanded = false
 
     var body: some View {
         ScrollView {
@@ -34,31 +36,45 @@ struct SetupView: View {
         }
     }
 
+    @ViewBuilder
     private var checklist: some View {
+        let presentation = checklistPresentation
         VStack(spacing: 0) {
-            SetupChecklistRow(
-                title: "Virtual Audio Device",
-                primary: model.virtualAudioDeviceName ?? "Mixed Capture Audio",
-                status: model.driverStatus.rawValue
-            )
-            SetupDivider()
-            SetupChecklistRow(
-                title: "Microphone",
-                primary: model.microphoneStatusText,
-                status: model.microphoneChecklistStatus
-            )
-            SetupDivider()
-            SetupChecklistRow(
-                title: "System Audio",
-                primary: systemAudioPrimaryText,
-                status: model.systemAudioAccess.rawValue
-            )
-            SetupDivider()
-            SetupChecklistRow(
-                title: "QuickTime Input",
-                primary: "Mixed Capture Audio",
-                status: model.quickTimeDeviceStatus.rawValue
-            )
+            SetupChecklistHeader(
+                completeCount: presentation.completeCount,
+                totalCount: presentation.rows.count,
+                status: presentation.headerStatus,
+                isExpanded: checklistExpanded
+            ) {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    checklistExpanded.toggle()
+                }
+            }
+            if checklistExpanded {
+                SetupDivider()
+                checklistRows(presentation.rows)
+            } else {
+                let visibleRows = presentation.defaultVisibleRows
+                if !visibleRows.isEmpty {
+                    SetupDivider()
+                    checklistRows(visibleRows)
+                }
+                if !presentation.completedRows.isEmpty {
+                    SetupDivider()
+                    CompletedChecklistDisclosureRow(
+                        count: presentation.completedRows.count,
+                        isExpanded: completedRowsExpanded
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            completedRowsExpanded.toggle()
+                        }
+                    }
+                    if completedRowsExpanded {
+                        SetupDivider()
+                        checklistRows(presentation.completedRows)
+                    }
+                }
+            }
         }
         .padding(.vertical, 2)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
@@ -66,6 +82,45 @@ struct SetupView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.primary.opacity(0.08))
         )
+    }
+
+    private var checklistPresentation: SetupChecklistPresentation {
+        SetupChecklistPresentation(rows: [
+            SetupChecklistRowPresentation(
+                id: .virtualAudioDevice,
+                title: "Virtual Audio Device",
+                primary: model.virtualAudioDeviceName ?? "Mixed Capture Audio",
+                status: model.driverStatus.rawValue
+            ),
+            SetupChecklistRowPresentation(
+                id: .microphone,
+                title: "Microphone",
+                primary: model.microphoneStatusText,
+                status: model.microphoneChecklistStatus
+            ),
+            SetupChecklistRowPresentation(
+                id: .systemAudio,
+                title: "System Audio",
+                primary: systemAudioPrimaryText,
+                status: model.systemAudioAccess.rawValue
+            ),
+            SetupChecklistRowPresentation(
+                id: .quickTimeInput,
+                title: "QuickTime Input",
+                primary: "Mixed Capture Audio",
+                status: model.quickTimeDeviceStatus.rawValue
+            ),
+        ])
+    }
+
+    @ViewBuilder
+    private func checklistRows(_ rows: [SetupChecklistRowPresentation]) -> some View {
+        ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+            if index > 0 {
+                SetupDivider()
+            }
+            SetupChecklistRow(row: row)
+        }
     }
 
     private var systemAudioPrimaryText: String {
@@ -81,12 +136,17 @@ struct SetupView: View {
 
     private var actionPanels: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if prioritizesSystemAudioPanel {
+                SystemAudioAccessPanel(model: model)
+            }
             MicrophoneAccessPanel(model: model)
             MicrophoneFaultPanel(model: model)
             MicrophonePriorityPanel(model: model)
             AudioLevelPanel(model: model, sourceLevelMeterModel: sourceLevelMeterModel)
             AppAudioSelectionPanel(model: model)
-            SystemAudioAccessPanel(model: model)
+            if !prioritizesSystemAudioPanel {
+                SystemAudioAccessPanel(model: model)
+            }
 
             Button {
                 model.refreshPrerequisites()
@@ -98,34 +158,97 @@ struct SetupView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var prioritizesSystemAudioPanel: Bool {
+        SetupActionPanelPlacement.prioritizesSystemAudio(model.systemAudioAccess)
+    }
+
     private var diagnostics: some View {
         DiagnosticsDefinitionsView(summary: model.healthSummary, sharedRingStats: model.sharedRingStats)
             .padding(.top, 2)
     }
 }
 
-private struct SetupChecklistRow: View {
-    let title: String
-    let primary: String
-    let status: String
+private struct SetupChecklistHeader: View {
+    let completeCount: Int
+    let totalCount: Int
+    let status: String?
+    let isExpanded: Bool
+    let toggle: () -> Void
 
     var body: some View {
-        let presentation = SetupStepPresentation(status: status)
+        HStack(spacing: 12) {
+            if let status {
+                StatusBadge(status: status, isComplete: true)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Setup")
+                    .font(.callout.weight(.semibold))
+                Text("\(completeCount) of \(totalCount) items checked")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(action: toggle) {
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse setup checklist" : "Expand setup checklist")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+    }
+}
+
+private struct SetupChecklistRow: View {
+    let row: SetupChecklistRowPresentation
+
+    var body: some View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
+                Text(row.title)
                     .font(.callout.weight(.semibold))
-                Text(primary)
+                Text(row.primary)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             Spacer()
-            StatusBadge(status: presentation.displayStatus, isComplete: presentation.isComplete)
+            StatusBadge(status: row.displayStatus, isComplete: row.isComplete)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
+    }
+}
+
+private struct CompletedChecklistDisclosureRow: View {
+    let count: Int
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 10) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .imageScale(.small)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14)
+                Text("Completed")
+                    .font(.callout.weight(.medium))
+                Text("\(count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+                Spacer()
+            }
+            .contentShape(Rectangle())
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
     }
 }
 
