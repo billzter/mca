@@ -1,0 +1,8 @@
+BUNDLE_LOADER = $(TEST_HOST)
+CODE_SIGNING_ALLOWED = YES
+GENERATE_INFOPLIST_FILE = YES
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks @loader_path/../Frameworks
+PRODUCT_BUNDLE_IDENTIFIER = com.minamiktr.mca.tests
+PRODUCT_NAME = MixedCaptureAudioTests
+SWIFT_VERSION = 5.0
+TEST_HOST = $(BUILT_PRODUCTS_DIR)/MixedCaptureAudio.app/Contents/MacOS/MixedCaptureAudio

@@ -6,6 +6,7 @@ enum MixedCaptureAudioMain {
 
     static func main() {
         let app = NSApplication.shared
+        AppCommandMenu.install(on: app)
         app.delegate = appDelegate
         app.run()
     }

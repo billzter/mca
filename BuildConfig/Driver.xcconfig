@@ -1,0 +1,9 @@
+GENERATE_INFOPLIST_FILE = NO
+HEADER_SEARCH_PATHS = $(PROJECT_DIR)/HALPlugin/Include
+INFOPLIST_FILE = HALPlugin/Resources/Info.plist
+MACH_O_TYPE = mh_bundle
+OTHER_CFLAGS = -std=c11 -Wall -Wextra -Werror -fvisibility=hidden
+OTHER_LDFLAGS = -framework CoreAudio -framework CoreFoundation
+PRODUCT_BUNDLE_IDENTIFIER = com.minamiktr.mca.driver
+PRODUCT_NAME = MixedCaptureAudio
+WRAPPER_EXTENSION = driver

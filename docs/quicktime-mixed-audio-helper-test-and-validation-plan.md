@@ -19,6 +19,8 @@ HAL load/plist spike
 
 Do not use QuickTime as the first HAL test. By the time QuickTime is involved, Rust mixing, shared-memory transport, HAL device visibility, HAL timing, and HAL IO should already be proven.
 
+Swift/AppKit/SwiftUI tests must use XCTest and be runnable through Xcode and `xcodebuild test`. Direct `swiftc`-compiled Swift test executables are not an accepted test layer.
+
 ## Test Layers
 
 ### Layer 1: Rust Unit Tests
@@ -97,7 +99,38 @@ Acceptance:
 - Reader never blocks waiting for shared memory or frames.
 - Reader never crashes on invalid/missing shared-memory state.
 
-### Layer 3: App-To-Reader Transport Tests
+### Layer 3: Swift App Unit Tests
+
+Purpose:
+
+- Prove app model, presentation, permission state mapping, preferences, diagnostics, selected-app behavior, and command/menu behavior without installing the HAL driver or relying on live recorder state.
+
+Test runner:
+
+```text
+xcodebuild test -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioTests -configuration Debug
+```
+
+Coverage:
+
+- Prerequisite status resolution and user-facing labels.
+- Setup checklist presentation and action placement.
+- Health diagnostics summaries and privacy-safe metadata.
+- Microphone and selected-app persistence behavior.
+- App model session state transitions.
+- Debounced app/source refresh behavior.
+- Source-level meter model and polling behavior.
+- Standard app command menu behavior needed by AppKit text fields.
+
+Acceptance:
+
+- Tests are XCTest cases in an XCTest bundle.
+- Tests use the Debug app product as their host and import the app module with `@testable import MixedCaptureAudio`.
+- Tests are visible and runnable from Xcode.
+- CI runs the same test bundle through `xcodebuild test`.
+- Tests do not depend on QuickTime, installed HAL state, live audio devices, release credentials, or privileged system mutation.
+
+### Layer 4: App-To-Reader Transport Tests
 
 Purpose:
 
@@ -126,7 +159,7 @@ Acceptance:
 - Rust-written frames are read correctly by the C reader.
 - Invalid/stale state becomes silence.
 
-### Layer 4: HAL Plug-In Load And Property Tests
+### Layer 5: HAL Plug-In Load And Property Tests
 
 Purpose:
 
@@ -135,7 +168,7 @@ Purpose:
 Prerequisite:
 
 ```text
-sudo Scripts/install-hal-driver.sh
+Scripts/manage-installation.sh install-driver
 ```
 
 Validation tool:
@@ -162,7 +195,7 @@ Acceptance:
 - Missing app/shared memory does not remove the device.
 - Timing properties do not depend on app producer heartbeat or shared-memory availability.
 
-### Layer 4A: Shared-Memory Across `coreaudiod` Sandbox Spike
+### Layer 5A: Shared-Memory Across `coreaudiod` Sandbox Spike
 
 Purpose:
 
@@ -191,7 +224,7 @@ Acceptance:
 - Continue with POSIX shared memory only if this passes on a clean target Mac.
 - If it fails, stop and run the non-real-time Mach/XPC setup fallback spike before deeper implementation.
 
-### Layer 4B: Non-Real-Time Mach/XPC Setup Fallback Spike
+### Layer 5B: Non-Real-Time Mach/XPC Setup Fallback Spike
 
 Purpose:
 
@@ -209,7 +242,7 @@ Acceptance:
 - Fallback is acceptable only if audio IO remains real-time safe.
 - If fallback cannot satisfy this, reassess the virtual-device architecture.
 
-### Layer 5: HAL IO With Synthetic Signal
+### Layer 6: HAL IO With Synthetic Signal
 
 Purpose:
 
@@ -241,7 +274,7 @@ Acceptance:
 - Captured WAV matches expected synthetic signal.
 - Invalid/missing data becomes silence.
 
-### Layer 6: Swift App Integration Tests
+### Layer 7: Swift App Integration Tests
 
 Purpose:
 
@@ -282,7 +315,7 @@ Acceptance:
 - App reports `Degraded` rather than crashing when one source fails.
 - App never writes mic, system, or mixed audio to logs, diagnostics, preferences, or support files.
 
-### Layer 7: Permissions And Onboarding Tests
+### Layer 8: Permissions And Onboarding Tests
 
 Purpose:
 
@@ -327,7 +360,7 @@ Acceptance:
 - App never starts capture invisibly.
 - App clearly distinguishes durable setup readiness from live verification confidence.
 
-### Layer 8: Install And Update Validation
+### Layer 9: Install And Update Validation
 
 Purpose:
 
@@ -360,7 +393,7 @@ Detailed update policy is documented in:
 /tmp/quicktime-mixed-audio-helper-update-and-installation-strategy.md
 ```
 
-### Layer 9: Manual QuickTime Acceptance
+### Layer 10: Manual QuickTime Acceptance
 
 Purpose:
 
@@ -452,10 +485,12 @@ CI should run:
 - Rust unit tests.
 - Rust FFI layout tests.
 - C shared-memory reader tests.
-- Swift unit tests.
-- Xcode build for app target.
+- Swift unit tests through `xcodebuild test`.
+- Xcode build/archive for app target.
 - Xcode build for HAL target.
 - Header generation check with `cbindgen`.
+
+CI should call Cargo, Xcode, and required packaging/release scripts directly. It should not hide Swift test execution behind shell wrappers, and it must not compile Swift tests directly with `swiftc`.
 
 CI may skip:
 

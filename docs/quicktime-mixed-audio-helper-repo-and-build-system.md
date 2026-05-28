@@ -2,16 +2,19 @@
 
 ## Summary
 
-Xcode is the top-level build owner for Apple artifacts. Cargo builds the Rust audio engine. Xcode invokes Cargo and `cbindgen` through explicit build targets/scripts, then links the generated Rust static library into the Swift app. The HAL plug-in is a C `.driver` bundle and does not link the Rust mixer engine in v1.
+Xcode is the top-level build owner for Apple artifacts. Cargo builds the Rust audio engine. Xcode invokes Cargo and `cbindgen` through explicit build targets/scripts, then links the generated Rust static library into the Swift app. XCTest is the test framework for Swift/AppKit/SwiftUI code. The HAL plug-in is a C `.driver` bundle and does not link the Rust mixer engine in v1.
 
 Core decision:
 
 ```text
-Xcode owns app, HAL plug-in, signing, packaging, and release orchestration.
+Xcode owns app, HAL plug-in, Swift unit tests, signing, packaging, and release orchestration.
+XCTest owns Swift/AppKit/SwiftUI unit tests.
 Cargo owns Rust compilation and Rust tests.
 cbindgen owns the generated C ABI header.
 lipo is used only when producing a universal Rust static library.
 ```
+
+Direct `swiftc` app builds and standalone Swift test executables are not the project standard. The app now has a native Xcode application target, and Swift app tests are native XCTest cases.
 
 The app, Rust engine, and HAL plug-in must share the same ABI constants for output format, shared-memory version, and target shared-fill latency. Keep those constants in one generated or mechanically verified header, and fail CI if Swift/Rust/C copies diverge.
 
@@ -24,17 +27,17 @@ The app, Rust engine, and HAL plug-in must share the same ABI constants for outp
 
   App/
     Sources/
-      MixedCaptureAudioApp.swift
-      Session/
-      Permissions/
-      Devices/
+      App/
+      Audio/
       Diagnostics/
-      Preferences/
-      RustBridge/
+      SystemAudio/
     Resources/
       Info.plist
       Assets.xcassets
     MixedCaptureAudio.entitlements
+
+  AppTests/
+    MixedCaptureAudioTests/
 
   HALPlugin/
     Sources/
@@ -65,13 +68,10 @@ The app, Rust engine, and HAL plug-in must share the same ABI constants for outp
       release/
 
   Scripts/
-    build-rust.sh
-    generate-rust-header.sh
-    install-hal-driver.sh
-    uninstall-hal-driver.sh
-    package-release.sh
-    package-driver-update.sh
-    notarize-release.sh
+    build-rust-engine.sh
+    generate-rust-shared-memory-abi.sh
+    manage-installation.sh
+    build-package.sh
 
   Docs/
 ```
@@ -97,6 +97,7 @@ Responsibilities:
 Links:
 
 - `CoreAudio.framework`
+- `CoreFoundation.framework`
 - `AVFoundation.framework` if used for mic/session helpers
 - `AppKit.framework`
 - `SwiftUI.framework`
@@ -135,11 +136,29 @@ Includes:
 
 - `HALPlugin/Include/MixedAudioSharedMemory.h`
 
+Build:
+
+- Native Xcode bundle target.
+- Product: `MixedCaptureAudio.driver`.
+- Info.plist: `HALPlugin/Resources/Info.plist`.
+
 Does not link:
 
 - Rust mixer static library.
 - Swift app code.
 - Objective-C/Swift UI/runtime layers.
+
+### `MixedCaptureAudioApp`
+
+Native Xcode macOS application target.
+
+Responsibilities:
+
+- Compile Swift app sources.
+- Compile Objective-C bridge/probe sources.
+- Own app Info.plist and entitlements.
+- Link AppKit, SwiftUI, AVFoundation, CoreAudio, AudioToolbox, ServiceManagement, and Foundation.
+- Invoke the Rust boundary build phase and link `Generated/lib/<profile>/libmixed_audio_engine.a`.
 
 ### `RustAudioEngine`
 
@@ -156,12 +175,26 @@ Responsibilities:
 
 ### Test Targets
 
-Recommended targets:
+Required targets:
 
-- Swift unit-test target for app services, permissions state mapping, diagnostics, and session state.
-- Swift unit-test target coverage for preferences defaults, migration, and diagnostic export privacy.
+- `MixedCaptureAudioTests`: app-hosted XCTest unit-test bundle for app services, permissions state mapping, diagnostics, presentation, preferences, and session state.
+- XCTest coverage for preferences defaults, migration, diagnostic export privacy, selected-app source behavior, setup presentation, and command/menu behavior.
 - Rust tests run through `cargo test`.
 - C shared-memory reader test target or small command-line tool for HAL transport behavior.
+
+Swift tests must be discoverable and runnable through Xcode and `xcodebuild test`. New Swift app tests should not be added as custom `@main` executables. App tests import the Debug app module with `@testable import MixedCaptureAudio`; the test target must not compile duplicate copies of app sources.
+
+## Dependency Management
+
+Use Apple-native dependency declarations for Apple code:
+
+- System frameworks live in Xcode target settings.
+- Swift packages, if introduced, are declared in the Xcode project/workspace through Swift Package Manager.
+- App target membership, resources, entitlements, Info.plist files, and test bundles are modeled in Xcode.
+- Rust dependencies remain in `Cargo.toml`.
+- Generated Rust headers and static libraries are external artifacts consumed by Xcode targets.
+
+Do not add custom shell dependency resolution for Swift packages or app frameworks.
 
 ## Rust Crate
 
@@ -210,7 +243,7 @@ aarch64-apple-darwin
 x86_64-apple-darwin
 ```
 
-For universal release builds, `build-rust.sh` runs Cargo for both targets and uses `lipo -create` to merge the two Rust static libraries into one file for Xcode to link.
+For universal release builds, the Rust/Xcode boundary should run Cargo for both targets and use `lipo -create` to merge the two Rust static libraries into one file for Xcode to link.
 
 For local debug builds, skip `lipo` and build only the active architecture.
 
@@ -220,21 +253,28 @@ Xcode should own the overall build graph:
 
 ```text
 RustAudioEngine target
-  -> Scripts/generate-rust-header.sh
-  -> Scripts/build-rust.sh
-  -> Generated/include/mixed_audio_engine.h
+  -> Scripts/generate-rust-shared-memory-abi.sh
+  -> Scripts/build-rust-engine.sh
+  -> Generated/include/MixedAudioEngine.h
   -> Generated/lib/<configuration>/libmixed_audio_engine.a
 
 MixedCaptureAudio.app target
   -> depends on RustAudioEngine
   -> links Generated/lib/<configuration>/libmixed_audio_engine.a
 
+MixedCaptureAudioTests target
+  -> app-hosted XCTest bundle
+  -> depends on MixedCaptureAudio.app
+  -> @testable imports MixedCaptureAudio
+
 MixedCaptureAudio.driver target
   -> builds C HAL plug-in
   -> links CoreAudio.framework only
 ```
 
-Scripts exist because Cargo and `cbindgen` are external tools, not because they own the product build. Keep scripts small, deterministic, and callable both from Xcode and terminal.
+Scripts exist only where the work cannot reasonably live in Xcode, Cargo, SwiftPM, GitHub Actions, or the native Apple tool being used. Cargo/ABI generation, packaging, signing, notarization, installation, uninstall, and Core Audio reload are valid integration seams. Manual proof scripts and support-only builder scripts are not part of the project surface.
+
+Scripts must not own Swift app compilation or Swift unit-test execution once the native target graph exists. Keep the remaining scripts small, deterministic, and callable both from Xcode and terminal.
 
 ## Debug Build Flow
 
@@ -244,8 +284,9 @@ Debug builds optimize for fast local iteration.
 2. `RustAudioEngine` runs `cbindgen` and verifies shared ABI constants.
 3. `RustAudioEngine` runs `cargo build` for the active architecture.
 4. Xcode links the active-architecture Rust static library into `MixedCaptureAudio.app`.
-5. Xcode builds `MixedCaptureAudio.driver`.
-6. Developer installs or reinstalls the HAL driver manually with `Scripts/install-hal-driver.sh`.
+5. Xcode runs `MixedCaptureAudioTests` through XCTest.
+6. Xcode builds `MixedCaptureAudio.driver`.
+7. Developer installs or reinstalls the HAL driver manually with `Scripts/manage-installation.sh install-driver`.
 
 Do not require universal Rust output for normal local debug builds.
 
@@ -286,16 +327,16 @@ Install location:
 /Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver
 ```
 
-Development install script:
+Development install command:
 
 ```text
-Scripts/install-hal-driver.sh
+Scripts/manage-installation.sh install-driver
 ```
 
-Development uninstall script:
+Development uninstall command:
 
 ```text
-Scripts/uninstall-hal-driver.sh
+Scripts/manage-installation.sh uninstall-driver
 ```
 
 Installer responsibilities:
@@ -351,43 +392,42 @@ This build doc only requires:
 
 ## Script Contracts
 
-### `Scripts/generate-rust-header.sh`
+Only active product-plumbing scripts should exist.
 
-Inputs:
+### `Scripts/generate-rust-shared-memory-abi.sh`
 
-- `Rust/mixed-audio-engine/cbindgen.toml`
-- Rust crate source files.
+Input:
+
+- `HALPlugin/Include/MixedAudioSharedMemory.h`
 
 Output:
 
-- `Generated/include/mixed_audio_engine.h`
+- `Rust/mixed-audio-engine/src/generated_shared_memory_abi.rs`
 
 Behavior:
 
-- Run `cbindgen`.
-- Fail if the generated header is empty or invalid.
-- In CI, compare checked-in header if the project chooses to commit generated headers.
+- Mirror shared-memory constants into Rust.
+- Support `--check` so CI can fail when the generated Rust mirror is stale.
 
-### `Scripts/build-rust.sh`
+### `Scripts/build-rust-engine.sh`
 
 Inputs:
 
-- Build configuration: Debug or Release.
-- Active architecture for debug.
-- Universal flag for release.
+- Build configuration: Debug or Release through `CONFIGURATION`.
 
 Outputs:
 
 - `Generated/lib/debug/libmixed_audio_engine.a`
 - `Generated/lib/release/libmixed_audio_engine.a`
+- `Generated/include/MixedAudioEngine.h`
 
 Behavior:
 
-- Debug: build only active architecture.
-- Release: build both `aarch64-apple-darwin` and `x86_64-apple-darwin`, then merge with `lipo`.
-- Fail clearly if Cargo, Rust targets, `cbindgen`, or `lipo` are unavailable.
+- Regenerate/check the shared-memory ABI mirror.
+- Run Cargo for the selected configuration.
+- Copy the generated Rust static library and C ABI header into `Generated/`.
 
-### `Scripts/install-hal-driver.sh`
+### `Scripts/manage-installation.sh`
 
 Inputs:
 
@@ -399,42 +439,30 @@ Output:
 
 Behavior:
 
-- Require administrator privileges.
-- Copy bundle.
-- Preserve signing.
-- Print reload/restart instructions.
+- `install-driver [driver-path]` requires administrator privileges, copies the bundle, preserves signing, and prints reload/restart instructions.
+- `uninstall-driver` removes only this project’s driver bundle.
+- `reload-coreaudio` restarts Core Audio driver hosts for local development.
+- `uninstall` removes the installed app and driver while preserving preferences and privacy permission records.
 
-### `Scripts/uninstall-hal-driver.sh`
-
-Inputs:
-
-- Installed driver path.
-
-Behavior:
-
-- Require administrator privileges.
-- Remove only this project’s driver bundle.
-- Print reload/restart instructions.
-
-### `Scripts/package-driver-update.sh`
+### `Scripts/build-package.sh`
 
 Inputs:
 
-- Signed `MixedCaptureAudio.driver`.
-- Driver version.
-- Shared-memory ABI version.
-- Fixed target shared-fill ABI constant.
+- Built or buildable app and HAL driver.
+- Optional `--sign`.
+- Optional `--notarize`, which implies `--sign`.
 
 Output:
 
-- Signed/notarized package installer for driver updates.
+- Package installer containing the app and HAL driver.
 
 Behavior:
 
-- Build a package payload that installs only this project’s HAL driver.
+- Build a package payload that installs this project’s app and HAL driver.
 - Set owner/group/permissions appropriate for `/Library/Audio/Plug-Ins/HAL`.
-- Include version metadata the app can verify after installation.
-- Avoid adding a privileged background helper in v1.
+- Reject relocatable bundle metadata.
+- With `--sign`, import Developer ID signing identities into a temporary keychain, sign the app, HAL driver, and package, then restore keychain state on exit.
+- With `--notarize`, submit the signed package through `notarytool`, staple, and validate the accepted package.
 
 ## CI Expectations
 
@@ -443,15 +471,16 @@ CI should run:
 - `cargo test`
 - `cbindgen` header generation check
 - Shared ABI constant consistency check
-- Xcode build for app target
-- Xcode build for HAL target
-- Xcode unit tests
-- C shared-memory reader tests
-- Diagnostics/preferences privacy tests
+- `xcodebuild test` for `MixedCaptureAudioTests`
+- `xcodebuild build` for `MixedCaptureAudioApp`
+- `xcodebuild build` for `MixedCaptureAudioDriver`
+- unsigned installer package build
 - Release packaging dry-run, where certificates are available.
-- App/driver version manifest validation.
+- App/driver version validation.
 
 CI may skip actual HAL installation unless running on a privileged macOS runner. HAL installation and QuickTime manual recording remain manual or dedicated hardware-runner tests.
+
+CI should call Cargo, Xcode, and the few required packaging/release scripts directly. It should not hide native build/test commands behind shell wrappers.
 
 ## Open Follow-Up Items
 

@@ -8,6 +8,8 @@ Chosen defaults: Swift app, Rust audio engine, C HAL AudioServerPlugIn, POSIX sh
 
 V1 records global system audio plus one selected mic. Per-app audio capture is not a v1 user-facing feature, but the architecture should leave a clean path for it: source descriptors, capture-mode enums, diagnostics, and internal tap plumbing should avoid assuming global-only forever.
 
+Apple-platform development standard: Xcode native targets own Swift/AppKit/SwiftUI products, XCTest owns Swift unit tests, and Swift dependencies are declared through Xcode/Swift Package Manager. Scripts may orchestrate external seams such as Cargo/cbindgen, packaging, signing, notarization, installation, and manual hardware proofs, but they must not become the primary Swift app build system or unit-test framework.
+
 ## Documentation Roadmap
 
 Create or maintain these supporting docs before the corresponding implementation phase:
@@ -140,7 +142,7 @@ Create or maintain these supporting docs before the corresponding implementation
 ## Test Plan
 
 - Rust unit tests cover mixer gain, clipping/limiting, silence handling, stereo output shape, ring-buffer underrun/overrun behavior, config snapshots, and health counters.
-- Swift unit tests cover device/source enumeration, permission state mapping, diagnostics state, and session-controller state transitions.
+- Swift unit tests run as XCTest cases through Xcode and cover device/source enumeration, permission state mapping, diagnostics state, and session-controller state transitions.
 - Integration test 30-second and 10-minute mixed recordings.
 - Integration test 30-60 minute shared-ring fill stability between app/Rust producer and HAL consumer.
 - Integration test the shared app-to-HAL transport with normal reads, underruns, app stopped, and app restart.

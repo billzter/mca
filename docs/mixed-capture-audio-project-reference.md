@@ -4,6 +4,18 @@ This is the reviewer-facing map for the built MixedCaptureAudio project. It summ
 
 For deeper design rationale, read the narrower design docs listed in [Reference Reading Order](#reference-reading-order).
 
+## Build-System Standard And Current Gap
+
+The intended project standard is Apple-native for Apple code:
+
+- Xcode native targets own the macOS app, HAL plug-in product modeling, framework links, resources, Info.plist files, entitlements, signing settings, schemes, and test plans.
+- XCTest owns Swift/AppKit/SwiftUI unit tests.
+- Swift dependencies, if added, are managed through Xcode/Swift Package Manager.
+- Cargo owns Rust compilation and Rust tests.
+- Scripts are limited to external integration seams: Cargo/cbindgen wrappers, generated ABI checks, packaging, signing, notarization, installation, and uninstall.
+
+Current state: the macOS app, HAL driver, and Swift tests run through native Xcode/XCTest targets.
+
 ## Product Contract
 
 MixedCaptureAudio is a native macOS menu-bar helper for QuickTime and Screenshot recordings. It publishes one virtual Core Audio input device named `Mixed Capture Audio` and feeds that device a live stereo mix of:
@@ -189,6 +201,14 @@ The app starts and maintains the live mixer as an app lifecycle responsibility. 
 
 System audio verification requires audible, unmuted system playback during the check. A silent Mac can produce an inconclusive or failed access check even when permission is otherwise available.
 
+Current setup behavior:
+
+- The onboarding checklist can auto-confirm system audio during an active recorder session when the virtual input is running and source meters prove non-silent system audio.
+- Completed onboarding rows collapse out of the default setup view while remaining reviewable.
+- Computer and Voice controls include source-level meters; meter polling is scoped to setup-window visibility.
+- Voice controls include balance/gain and the optional Enhance Voice compressor path.
+- Selected-app capture shows selected apps inline and uses an add/search popover for discovery.
+
 ## Repository Map
 
 | Path | Purpose |
@@ -197,7 +217,7 @@ System audio verification requires audible, unmuted system playback during the c
 | `App/Sources/Audio/LiveMixerSession.m` | Native capture graph and Swift-to-Rust live mixer bridge |
 | `App/Sources/SystemAudio/SystemAudioAccessProbe.m` | System-audio access probe used by setup/check flows |
 | `App/Sources/Diagnostics/HealthDiagnostics.swift` | User-facing health summary logic |
-| `AppTests/` | Swift model/status/setup tests compiled as direct test executables |
+| `AppTests/` | Transitional Swift model/status/setup tests; target state is an XCTest bundle run by Xcode |
 | `App/Resources/Info.plist` | App bundle metadata, privacy strings, LSUIElement agent setting |
 | `App/MixedCaptureAudio.entitlements` | App entitlements, including microphone access for Developer ID builds |
 | `HALPlugin/Sources/` | C HAL AudioServerPlugIn implementation and shared-memory reader/probe code |
@@ -205,10 +225,7 @@ System audio verification requires audible, unmuted system playback during the c
 | `HALPlugin/Resources/Info.plist` | HAL bundle identifier, factory metadata, compatibility metadata |
 | `Rust/mixed-audio-engine/src/` | Rust mixer, session, shared-memory writer, generated ABI mirror |
 | `Rust/mixed-audio-engine/tests/` | Rust mixer and drift/fill stress tests |
-| `Tools/` | Small C/Objective-C validation and proof tools |
-| `Scripts/` | Production build, validate, install, package, sign, notarize, reload, and uninstall commands |
-| `Scripts/Support/` | Build helpers for validation/proof tools |
-| `Scripts/ManualProofs/` | Hardware/manual proof wrappers for installed-driver and live-audio scenarios |
+| `Scripts/` | Minimal active product plumbing only |
 | `Packaging/` | Installer component property metadata |
 | `Generated/` | Generated headers/libs; only placeholders should be committed or packaged for review |
 | `TestArtifacts/` | Local proof output; only placeholders should be committed or packaged for review |
@@ -216,50 +233,37 @@ System audio verification requires audible, unmuted system playback during the c
 
 ## Primary Command Surface
 
-Use `Scripts/mca-build` as the main human and CI entrypoint:
+Run native tools directly for verification:
 
 ```sh
-Scripts/mca-build verify
-Scripts/mca-build package --version 0.2.0 --build 42
-Scripts/mca-build release --version 0.2.0 --build 42
-Scripts/mca-build notarize --version 0.2.0 --build 42
-Scripts/mca-build release-notarized --version 0.2.0 --build 42
-Scripts/mca-build version
+Scripts/generate-rust-shared-memory-abi.sh --check
+cargo test --manifest-path Rust/mixed-audio-engine/Cargo.toml
+xcodebuild test -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioTests -configuration Debug
+xcodebuild build -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioApp -configuration Debug
+xcodebuild build -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioDriver -configuration Debug
 ```
 
-`Scripts/mca-build verify` currently runs:
+Current build responsibility is split between Xcode and necessary boundary scripts:
 
-- `Scripts/validate-rust-engine.sh`
-- `Scripts/validate-app.sh`
-- `Scripts/validate-build-system.sh`
-- `Scripts/validate-packaging.sh`
-- `Scripts/validate-build-orchestration.sh`
-- `Scripts/validate-signing-config.sh`
-- `Scripts/validate-notarization-config.sh`
-
-Build responsibility is split by target:
-
-- `Scripts/build-rust-engine.sh` regenerates the shared-memory ABI mirror and runs `cargo build`.
-- `Scripts/build-app.sh` builds Rust first, compiles the Objective-C bridge/probe code, compiles Swift app sources, links the Rust static library, and signs the app bundle.
-- `Scripts/build-hal-driver.sh` compiles and signs the C HAL `.driver` bundle.
-- `Scripts/validate-app-model.sh` compiles and runs the Swift model/status/setup tests from `AppTests/`.
+- `MixedCaptureAudioApp` is a native Xcode macOS application target. Xcode compiles Swift/ObjC app sources, owns app Info.plist and entitlements, links system frameworks, invokes the Rust boundary build phase, and links the generated Rust static library.
+- `MixedCaptureAudioTests` is a native XCTest bundle hosted by the Debug app product. Tests import the app module with `@testable import MixedCaptureAudio`; direct Swift test executables are not part of the project standard.
+- `MixedCaptureAudioDriver` is a native Xcode bundle target that emits `MixedCaptureAudio.driver`. Xcode compiles the HAL C sources, expands the driver Info.plist, links CoreAudio/CoreFoundation, and signs the bundle.
+- `Scripts/build-rust-engine.sh` regenerates the shared-memory ABI mirror and runs `cargo build`; Xcode invokes it only at the Rust boundary.
 
 Focused commands:
 
 ```sh
 Scripts/build-rust-engine.sh
-Scripts/build-app.sh
-Scripts/build-hal-driver.sh
-Scripts/package-installer.sh
-Scripts/package-signed-installer.sh
-Scripts/notarize-package.sh
-Scripts/install-hal-driver.sh
-Scripts/reload-coreaudio.sh
-Scripts/uninstall-hal-driver.sh
-Scripts/uninstall-mca.sh
+Scripts/build-package.sh
+Scripts/build-package.sh --sign
+Scripts/build-package.sh --sign --notarize
+Scripts/manage-installation.sh install-driver
+Scripts/manage-installation.sh reload-coreaudio
+Scripts/manage-installation.sh uninstall-driver
+Scripts/manage-installation.sh uninstall
 ```
 
-Reviewers should prefer the purpose-named scripts above instead of older phase/stage language. Historical proof runners live under `Scripts/ManualProofs/` on purpose.
+No shell script should exist unless it is active product plumbing that cannot reasonably live in Xcode, Cargo, SwiftPM, GitHub Actions, or the relevant native tool.
 
 ## Build Outputs
 
@@ -280,34 +284,33 @@ These are generated artifacts. They are excluded by `.gitignore` and should gene
 
 ## Local Development Flow
 
-A typical source review or local build loop is:
+A target source review or local build loop is:
 
 ```sh
-Scripts/mca-build verify
-Scripts/build-app.sh
-Scripts/build-hal-driver.sh
-Scripts/package-installer.sh
+Scripts/generate-rust-shared-memory-abi.sh --check
+cargo test --manifest-path Rust/mixed-audio-engine/Cargo.toml
+xcodebuild test -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioTests -configuration Debug
+xcodebuild build -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioApp -configuration Debug
+Scripts/build-package.sh
 ```
 
 For installed-driver testing:
 
 ```sh
-Scripts/install-hal-driver.sh
-Scripts/reload-coreaudio.sh
-Scripts/Support/build-audio-device-list.sh
-Build/Debug/Tools/ListAudioDevices
+Scripts/manage-installation.sh install-driver
+Scripts/manage-installation.sh reload-coreaudio
 ```
 
 For cleanup:
 
 ```sh
-Scripts/uninstall-hal-driver.sh
-Scripts/uninstall-mca.sh
+Scripts/manage-installation.sh uninstall-driver
+Scripts/manage-installation.sh uninstall
 ```
 
 Some installed-driver and release verification commands interact with system locations, Core Audio daemons, keychains, certificates, or notarization services. Run those deliberately and expect admin prompts or environment variables where appropriate.
 
-CI uses `.github/workflows/ci.yml` to run `Scripts/mca-build verify` on macOS. Release packaging is orchestrated by `.github/workflows/release.yml`, which builds the signed/notarized package from repository secrets and uploads the `.pkg` artifact.
+CI uses `.github/workflows/ci.yml` to call Cargo, Xcode, and package scripts directly on macOS. Release packaging is orchestrated by `.github/workflows/release.yml`, which builds the signed/notarized package from repository secrets and uploads the `.pkg` artifact.
 
 ## Install, Reload, And Uninstall
 
@@ -323,9 +326,9 @@ The HAL driver is discovered from the system HAL plug-ins directory and can rema
 - `com.apple.audio.Core-Audio-Driver-Service.helper`
 - `coreaudiod`
 
-Use `Scripts/reload-coreaudio.sh` for that development flow. User-facing product flows should not silently kill Core Audio; the app should present clear reload/restart guidance.
+Use `Scripts/manage-installation.sh reload-coreaudio` for that development flow. User-facing product flows should not silently kill Core Audio; the app should present clear reload/restart guidance.
 
-`Scripts/install-hal-driver.sh` is a developer install helper: it copies the built driver to the HAL plug-ins directory, sets system ownership/permissions, verifies the installed bundle, and points back to the reload helper when Core Audio needs to pick up the change. `Scripts/uninstall-mca.sh` removes the app and HAL driver but intentionally preserves preferences and macOS privacy permission records.
+`Scripts/manage-installation.sh` is the developer install lifecycle helper. It can install the built driver, reload Core Audio for local testing, remove only the driver, or uninstall the app and driver while preserving preferences and macOS privacy permission records.
 
 ## Release And Signing Inputs
 
@@ -344,33 +347,27 @@ Release signing expects local private material under `.Secrets/` by default, wit
 | Notary issuer ID | `MCA_NOTARY_ISSUER_ID` |
 | Apple team ID | `MCA_TEAM_ID` |
 
-Before release signing, the public Apple Developer ID certificate chain must be available to the host keychain. `Scripts/install-public-signing-certs.sh` exists for that setup.
+Before release signing, the public Apple Developer ID certificate chain must be available to the host keychain. `Scripts/release-support.sh install-public-certs` exists for that setup.
 
 Do not include `.Secrets/`, `*.p12`, `*.p8`, `*.keychain-db`, or `release.env` in review packages.
 
-Unsigned package builds stage app and driver payloads and validate package metadata. Signed release builds create a temporary signing keychain, import Developer ID identities, restore the user's keychain state on exit, then delegate to the package builder. Notarization submits the signed package with `notarytool`, staples the accepted ticket, and validates the stapled package.
+Unsigned package builds stage app and driver payloads and validate package metadata. `Scripts/build-package.sh --sign` creates a temporary signing keychain, imports Developer ID identities, restores the user's keychain state on exit, and signs the app, HAL driver, and package. `Scripts/build-package.sh --sign --notarize` also submits the signed package with `notarytool`, staples the accepted ticket, and validates the stapled package.
 
 ## Verification Expectations
 
-For ordinary code review, the highest-signal command is:
+For ordinary code review, use native tools directly:
 
 ```sh
-Scripts/mca-build verify
-```
-
-For narrower review:
-
-```sh
-Scripts/validate-rust-engine.sh
-Scripts/validate-app.sh
-Scripts/validate-build-system.sh
-Scripts/validate-packaging.sh
+cargo test --manifest-path Rust/mixed-audio-engine/Cargo.toml
+xcodebuild test -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioTests -configuration Debug
+xcodebuild build -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioApp -configuration Debug
+Scripts/build-package.sh
 ```
 
 For syntax and metadata spot checks:
 
 ```sh
-find Scripts -maxdepth 2 -type f -print0 | xargs -0 sh -n
+find Scripts -maxdepth 1 -type f -print0 | xargs -0 sh -n
 plutil -lint App/Resources/Info.plist HALPlugin/Resources/Info.plist MixedCaptureAudio.xcodeproj/project.pbxproj Packaging/MixedCaptureAudioComponentProperties.plist
 ```
 
@@ -415,7 +412,7 @@ These are recurring mistakes worth checking during review:
 - Do not rely only on `coreaudiod` restart when testing driver metadata changes; the Core Audio driver-service helper can keep stale HAL code loaded.
 - Do not trust sandboxed Developer ID signature failures as final release evidence; verify release artifacts outside restricted tool sandboxes when signing/trust is the question.
 - Do not package `.Secrets/` or generated local build products for external review.
-- Do not treat QuickTime as the first HAL test; use the focused tools and installed-driver checks first, then run QuickTime/Screenshot acceptance.
+- Do not treat QuickTime as the first HAL test; verify native builds and installed-driver state first, then run QuickTime/Screenshot acceptance.
 
 ## Reference Reading Order
 

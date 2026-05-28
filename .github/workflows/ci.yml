@@ -7,6 +7,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: macos-14
@@ -14,5 +17,37 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Verify build, tests, package shape, and signing config
-        run: Scripts/mca-build verify
+      - name: Verify Rust engine
+        run: |
+          Scripts/generate-rust-shared-memory-abi.sh --check
+          cargo test --manifest-path Rust/mixed-audio-engine/Cargo.toml
+
+      - name: Verify Xcode tests
+        run: |
+          xcodebuild test \
+            -project MixedCaptureAudio.xcodeproj \
+            -scheme MixedCaptureAudioTests \
+            -destination "platform=macOS,arch=$(uname -m)" \
+            -configuration Debug \
+            -derivedDataPath Build/XcodeDerivedData
+
+      - name: Build Xcode app
+        run: |
+          xcodebuild build \
+            -project MixedCaptureAudio.xcodeproj \
+            -scheme MixedCaptureAudioApp \
+            -destination "platform=macOS,arch=$(uname -m)" \
+            -configuration Debug \
+            -derivedDataPath Build/XcodeDerivedData
+
+      - name: Build Xcode HAL driver
+        run: |
+          xcodebuild build \
+            -project MixedCaptureAudio.xcodeproj \
+            -scheme MixedCaptureAudioDriver \
+            -destination "platform=macOS,arch=$(uname -m)" \
+            -configuration Debug \
+            -derivedDataPath Build/XcodeDerivedData
+
+      - name: Build unsigned installer package
+        run: CONFIGURATION=Release Scripts/build-package.sh
