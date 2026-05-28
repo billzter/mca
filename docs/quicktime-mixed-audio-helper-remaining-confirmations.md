@@ -268,18 +268,17 @@ a signed/notarized macOS .pkg that can install the app, the HAL driver, or both
 
 Testing permission onboarding requires returning the app to first-run-like TCC states.
 
-Microphone reset is expected to use:
+Permission reset commands:
 
 ```text
 tccutil reset Microphone com.minamiktr.mca
+tccutil reset ScreenCapture com.minamiktr.mca
 ```
 
-System audio capture reset behavior still needs validation because macOS TCC service names and UI behavior can vary by capability and OS version.
+`ScreenCapture` is the TCC service used for Screen & System Audio Recording. These commands reset the app's privacy decisions; app relaunch may still be useful after reset so the UI refreshes from a first-run-like state.
 
 What needs to be determined:
 
-- exact reset command for system audio capture permission, if available
-- whether reset works per bundle identifier
 - whether app relaunch is required after reset
 - whether System Settings changes are visible immediately to the app
 - what the test-capture flow reports for Unknown, NotTested, PromptExpected, Starting, Started, WaitingForSignal, ReceivingAudio, Silent, ProceedUnverified, DeniedOrUnavailable, and Failed states
@@ -301,7 +300,7 @@ Release rule:
 - Onboarding must not claim system audio is available until the capture path actually works.
 - Onboarding may let the user proceed unverified from a silent machine, but diagnostics must keep system audio marked unverified until audio is observed.
 - Diagnostics should include practical capture-test state.
-- Test docs should record exact reset commands only after prototype validation.
+- Test docs record `tccutil reset Microphone` and `tccutil reset ScreenCapture` as the first-run reset commands.
 
 ## Numeric Test Thresholds
 

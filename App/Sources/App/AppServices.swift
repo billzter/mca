@@ -49,11 +49,20 @@ final class AppServices: ObservableObject {
             systemAudioAccessStore: AppSystemAudioAccessStore(),
             launchAtStartupController: AppLaunchAtStartupController()
         )
+        let systemAudioAutoVerifier = SystemAudioAutoVerifier {
+            statusModel.markSystemAudioReceivingFromLiveProof()
+        }
         model = statusModel
         sourceLevelMeterModel = SourceLevelMeterModel(
             liveMixerController: liveMixerController,
             isMixerRunning: { [weak statusModel] in
                 statusModel?.liveMixerState == .running
+            },
+            onRawSnapshot: { snapshot in
+                systemAudioAutoVerifier.observe(
+                    snapshot: snapshot,
+                    recorderActive: liveMixerController.isVirtualAudioDeviceRunning()
+                )
             }
         )
         sourceLevelMeterPollingController = SourceLevelMeterPollingController { [weak sourceLevelMeterModel] in

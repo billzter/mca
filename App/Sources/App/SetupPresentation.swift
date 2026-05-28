@@ -73,6 +73,71 @@ struct SetupStepPresentation {
     }
 }
 
+struct SetupChecklistRowPresentation: Equatable, Identifiable {
+    enum ID: Equatable {
+        case virtualAudioDevice
+        case microphone
+        case systemAudio
+        case quickTimeInput
+    }
+
+    let id: ID
+    let title: String
+    let primary: String
+    let status: String
+
+    var step: SetupStepPresentation {
+        SetupStepPresentation(status: status)
+    }
+
+    var displayStatus: String {
+        step.displayStatus
+    }
+
+    var isComplete: Bool {
+        step.isComplete
+    }
+}
+
+struct SetupChecklistPresentation {
+    let rows: [SetupChecklistRowPresentation]
+
+    var completedRows: [SetupChecklistRowPresentation] {
+        rows.filter(\.isComplete)
+    }
+
+    var incompleteRows: [SetupChecklistRowPresentation] {
+        rows.filter { !$0.isComplete }
+    }
+
+    var defaultVisibleRows: [SetupChecklistRowPresentation] {
+        incompleteRows
+    }
+
+    var completeCount: Int {
+        completedRows.count
+    }
+
+    var isComplete: Bool {
+        !rows.isEmpty && completeCount == rows.count
+    }
+
+    var headerStatus: String? {
+        isComplete ? "Complete" : nil
+    }
+}
+
+enum SetupActionPanelPlacement {
+    static func prioritizesSystemAudio(_ status: SystemAudioAccessStatus) -> Bool {
+        switch status {
+        case .receivingAudio, .proceedUnverified:
+            false
+        case .unknown, .notTested, .promptExpected, .starting, .started, .waitingForSignal, .silent, .deniedOrUnavailable, .failed:
+            true
+        }
+    }
+}
+
 enum SetupWindowReopenPolicy {
     static let shouldAllowSystemDefaultWindowCreation = false
 }
