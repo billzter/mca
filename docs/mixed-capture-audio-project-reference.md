@@ -248,7 +248,7 @@ Current build responsibility is split between Xcode and necessary boundary scrip
 - `MixedCaptureAudioApp` is a native Xcode macOS application target. Xcode compiles Swift/ObjC app sources, owns app Info.plist and entitlements, links system frameworks, invokes the Rust boundary build phase, and links the generated Rust static library.
 - `MixedCaptureAudioTests` is a native XCTest bundle hosted by the Debug app product. Tests import the app module with `@testable import MixedCaptureAudio`; direct Swift test executables are not part of the project standard.
 - `MixedCaptureAudioDriver` is a native Xcode bundle target that emits `MixedCaptureAudio.driver`. Xcode compiles the HAL C sources, expands the driver Info.plist, links CoreAudio/CoreFoundation, and signs the bundle.
-- `Scripts/build-rust-engine.sh` regenerates the shared-memory ABI mirror and runs `cargo build`; Xcode invokes it only at the Rust boundary.
+- `Scripts/build-rust-engine.sh` regenerates the shared-memory ABI mirror and builds the Rust static library; Debug builds stay single-architecture, while Release builds merge `aarch64-apple-darwin` and `x86_64-apple-darwin` with `lipo`.
 
 Focused commands:
 
@@ -281,6 +281,8 @@ TestArtifacts/
 ```
 
 These are generated artifacts. They are excluded by `.gitignore` and should generally be excluded from review zips. The meaningful source is the scripts and project files that recreate them.
+
+`Generated/lib/release/libmixed_audio_engine.a` must be universal for release packaging. The app and HAL driver Release Xcode configurations likewise resolve to `ARCHS = arm64 x86_64` and `ONLY_ACTIVE_ARCH = NO`; Debug/test builds remain host-architecture focused.
 
 ## Local Development Flow
 
@@ -352,6 +354,8 @@ Before release signing, the public Apple Developer ID certificate chain must be 
 Do not include `.Secrets/`, `*.p12`, `*.p8`, `*.keychain-db`, or `release.env` in review packages.
 
 Unsigned package builds stage app and driver payloads and validate package metadata. `Scripts/build-package.sh --sign` creates a temporary signing keychain, imports Developer ID identities, restores the user's keychain state on exit, and signs the app, HAL driver, and package. `Scripts/build-package.sh --sign --notarize` also submits the signed package with `notarytool`, staples the accepted ticket, and validates the stapled package.
+
+Starting with version `0.2.x`, release `.pkg` installers support universal macOS architecture. Release package builds must contain both `arm64` and `x86_64` slices. Unless `XCODE_DESTINATION` is explicitly set, `Scripts/build-package.sh` uses Xcode's generic macOS destination for Release so Xcode builds both slices instead of a host-specific `My Mac` product. It fails the package build if the built app executable, built HAL driver executable, generated Release Rust static library, or expanded package payload executables are missing either slice.
 
 ## Verification Expectations
 

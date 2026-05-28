@@ -99,6 +99,8 @@
 		4BCA00000000000000000603 /* App-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "BuildConfig/App-Release.xcconfig"; sourceTree = "<group>"; };
 		4BCA00000000000000000604 /* Driver.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = BuildConfig/Driver.xcconfig; sourceTree = "<group>"; };
 		4BCA00000000000000000605 /* Tests.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = BuildConfig/Tests.xcconfig; sourceTree = "<group>"; };
+		4BCA00000000000000000606 /* Driver-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "BuildConfig/Driver-Debug.xcconfig"; sourceTree = "<group>"; };
+		4BCA00000000000000000607 /* Driver-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "BuildConfig/Driver-Release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -176,6 +178,8 @@
 				4BCA00000000000000000602 /* App-Debug.xcconfig */,
 				4BCA00000000000000000603 /* App-Release.xcconfig */,
 				4BCA00000000000000000604 /* Driver.xcconfig */,
+				4BCA00000000000000000606 /* Driver-Debug.xcconfig */,
+				4BCA00000000000000000607 /* Driver-Release.xcconfig */,
 				4BCA00000000000000000605 /* Tests.xcconfig */,
 			);
 			sourceTree = "<group>";
@@ -389,14 +393,14 @@
 		};
 		4BCA00000000000000000051 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 4BCA00000000000000000604 /* Driver.xcconfig */;
+			baseConfigurationReference = 4BCA00000000000000000606 /* Driver-Debug.xcconfig */;
 			buildSettings = {
 			};
 			name = Debug;
 		};
 		4BCA00000000000000000052 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 4BCA00000000000000000604 /* Driver.xcconfig */;
+			baseConfigurationReference = 4BCA00000000000000000607 /* Driver-Release.xcconfig */;
 			buildSettings = {
 			};
 			name = Release;

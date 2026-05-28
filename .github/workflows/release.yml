@@ -57,6 +57,9 @@ jobs:
             MCA_SKIP_PUBLIC_CERT_VERIFY=1 \
             Scripts/release-support.sh install-public-certs
 
+      - name: Install Rust release targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       - name: Build signed notarized package
         env:
           MCA_P12_PASSWORD: ${{ secrets.MCA_P12_PASSWORD }}

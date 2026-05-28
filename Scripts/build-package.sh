@@ -57,7 +57,13 @@ CONFIGURATION="${CONFIGURATION:-Release}"
 APP_DIR="Build/$CONFIGURATION/MixedCaptureAudio.app"
 DRIVER_DIR="Build/$CONFIGURATION/MixedCaptureAudio.driver"
 XCODE_DERIVED_DATA="${XCODE_DERIVED_DATA:-Build/XcodeDerivedData}"
-XCODE_DESTINATION="${XCODE_DESTINATION:-platform=macOS,arch=$(uname -m)}"
+if [ "${XCODE_DESTINATION+x}" != "x" ]; then
+  if [ "$CONFIGURATION" = "Release" ]; then
+    XCODE_DESTINATION="generic/platform=macOS"
+  else
+    XCODE_DESTINATION="platform=macOS,arch=$(uname -m)"
+  fi
+fi
 XCODE_APP_DIR="$XCODE_DERIVED_DATA/Build/Products/$CONFIGURATION/MixedCaptureAudio.app"
 XCODE_DRIVER_DIR="$XCODE_DERIVED_DATA/Build/Products/$CONFIGURATION/MixedCaptureAudio.driver"
 PACKAGE_DIR="Build/Packages"
@@ -263,6 +269,75 @@ assert_distribution_entitlements() {
   fi
 }
 
+assert_arch_slices() {
+  binary_path="$1"
+  label="$2"
+
+  test -e "$binary_path" || fail "$label not found: $binary_path"
+  arch_info="$(lipo -info "$binary_path" 2>/dev/null)" ||
+    fail "could not read architectures for $label: $binary_path"
+
+  for required_arch in arm64 x86_64; do
+    case " $arch_info " in
+      *" $required_arch "*)
+        ;;
+      *)
+        fail "$label missing required $required_arch slice: $arch_info"
+        ;;
+    esac
+  done
+
+  printf 'verified %s architectures: %s\n' "$label" "$arch_info"
+}
+
+assert_release_build_architectures() {
+  if [ "$CONFIGURATION" != "Release" ]; then
+    return
+  fi
+
+  assert_arch_slices "$APP_DIR/Contents/MacOS/MixedCaptureAudio" "app executable"
+  assert_arch_slices "$DRIVER_DIR/Contents/MacOS/MixedCaptureAudio" "HAL driver executable"
+  assert_arch_slices "$ROOT_DIR/Generated/lib/release/libmixed_audio_engine.a" "Rust static library"
+}
+
+assert_release_payload_architectures() {
+  if [ "$CONFIGURATION" != "Release" ]; then
+    return
+  fi
+
+  assert_arch_slices "$PAYLOAD_VERIFY_ROOT/Payload/Applications/MixedCaptureAudio.app/Contents/MacOS/MixedCaptureAudio" "packaged app executable"
+  assert_arch_slices "$PAYLOAD_VERIFY_ROOT/Payload/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver/Contents/MacOS/MixedCaptureAudio" "packaged HAL driver executable"
+}
+
+run_xcodebuild_build() {
+  scheme="$1"
+  marketing_version="$2"
+  current_project_version="$3"
+  code_sign_identity="$4"
+  other_code_sign_flags="$5"
+
+  set -- build \
+    -project MixedCaptureAudio.xcodeproj \
+    -scheme "$scheme"
+
+  if [ "$XCODE_DESTINATION" != "" ]; then
+    set -- "$@" -destination "$XCODE_DESTINATION"
+  fi
+
+  set -- "$@" \
+    -configuration "$CONFIGURATION" \
+    -derivedDataPath "$XCODE_DERIVED_DATA" \
+    "MARKETING_VERSION=$marketing_version" \
+    "CURRENT_PROJECT_VERSION=$current_project_version" \
+    "CODE_SIGN_IDENTITY=$code_sign_identity"
+
+  if [ "$other_code_sign_flags" != "" ]; then
+    set -- "$@" "OTHER_CODE_SIGN_FLAGS=$other_code_sign_flags"
+  fi
+
+  xcodebuild "$@"
+}
+
 create_clean_package() {
   unsigned_package_path="$PACKAGE_WORK_DIR/MixedCaptureAudio-unsigned.pkg"
   clean_unsigned_package_path="$PACKAGE_WORK_DIR/MixedCaptureAudio-clean-unsigned.pkg"
@@ -331,26 +406,19 @@ build_app() {
   code_sign_identity="${APP_SIGN_IDENTITY:--}"
 
   if [ "$KEYCHAIN_PATH" != "" ]; then
-    xcodebuild build \
-      -project MixedCaptureAudio.xcodeproj \
-      -scheme MixedCaptureAudioApp \
-      -destination "$XCODE_DESTINATION" \
-      -configuration "$CONFIGURATION" \
-      -derivedDataPath "$XCODE_DERIVED_DATA" \
-      "MARKETING_VERSION=$marketing_version" \
-      "CURRENT_PROJECT_VERSION=$current_project_version" \
-      "CODE_SIGN_IDENTITY=$code_sign_identity" \
-      "OTHER_CODE_SIGN_FLAGS=--keychain $KEYCHAIN_PATH --timestamp"
+    run_xcodebuild_build \
+      MixedCaptureAudioApp \
+      "$marketing_version" \
+      "$current_project_version" \
+      "$code_sign_identity" \
+      "--keychain $KEYCHAIN_PATH --timestamp"
   else
-    xcodebuild build \
-      -project MixedCaptureAudio.xcodeproj \
-      -scheme MixedCaptureAudioApp \
-      -destination "$XCODE_DESTINATION" \
-      -configuration "$CONFIGURATION" \
-      -derivedDataPath "$XCODE_DERIVED_DATA" \
-      "MARKETING_VERSION=$marketing_version" \
-      "CURRENT_PROJECT_VERSION=$current_project_version" \
-      "CODE_SIGN_IDENTITY=$code_sign_identity"
+    run_xcodebuild_build \
+      MixedCaptureAudioApp \
+      "$marketing_version" \
+      "$current_project_version" \
+      "$code_sign_identity" \
+      ""
   fi
 
   test -d "$XCODE_APP_DIR" || fail "Xcode app product not found: $XCODE_APP_DIR"
@@ -366,26 +434,19 @@ build_driver() {
   code_sign_identity="${DRIVER_SIGN_IDENTITY:-${APP_SIGN_IDENTITY:--}}"
 
   if [ "$KEYCHAIN_PATH" != "" ]; then
-    xcodebuild build \
-      -project MixedCaptureAudio.xcodeproj \
-      -scheme MixedCaptureAudioDriver \
-      -destination "$XCODE_DESTINATION" \
-      -configuration "$CONFIGURATION" \
-      -derivedDataPath "$XCODE_DERIVED_DATA" \
-      "MARKETING_VERSION=$marketing_version" \
-      "CURRENT_PROJECT_VERSION=$current_project_version" \
-      "CODE_SIGN_IDENTITY=$code_sign_identity" \
-      "OTHER_CODE_SIGN_FLAGS=--keychain $KEYCHAIN_PATH --timestamp"
+    run_xcodebuild_build \
+      MixedCaptureAudioDriver \
+      "$marketing_version" \
+      "$current_project_version" \
+      "$code_sign_identity" \
+      "--keychain $KEYCHAIN_PATH --timestamp"
   else
-    xcodebuild build \
-      -project MixedCaptureAudio.xcodeproj \
-      -scheme MixedCaptureAudioDriver \
-      -destination "$XCODE_DESTINATION" \
-      -configuration "$CONFIGURATION" \
-      -derivedDataPath "$XCODE_DERIVED_DATA" \
-      "MARKETING_VERSION=$marketing_version" \
-      "CURRENT_PROJECT_VERSION=$current_project_version" \
-      "CODE_SIGN_IDENTITY=$code_sign_identity"
+    run_xcodebuild_build \
+      MixedCaptureAudioDriver \
+      "$marketing_version" \
+      "$current_project_version" \
+      "$code_sign_identity" \
+      ""
   fi
 
   test -d "$XCODE_DRIVER_DIR" || fail "Xcode HAL driver product not found: $XCODE_DRIVER_DIR"
@@ -403,6 +464,7 @@ build_app
 build_driver
 codesign --verify --deep --strict --verbose=4 "$APP_DIR" >/dev/null
 codesign --verify --deep --strict --verbose=4 "$DRIVER_DIR" >/dev/null
+assert_release_build_architectures
 if [ "$SIGN_PACKAGE" = "1" ]; then
   assert_distribution_entitlements "$APP_DIR/Contents/MacOS/MixedCaptureAudio"
 fi
@@ -449,6 +511,7 @@ if ! grep -q '<strict-identifier>' "$PAYLOAD_VERIFY_ROOT/PackageInfo"; then
   printf 'package metadata missing strict bundle identifiers: %s\n' "$PACKAGE_PATH" >&2
   exit 1
 fi
+assert_release_payload_architectures
 rm -rf "$PAYLOAD_VERIFY_ROOT"
 
 printf 'built %s\n' "$PACKAGE_PATH"

@@ -2,6 +2,7 @@ BUNDLE_LOADER = $(TEST_HOST)
 CODE_SIGNING_ALLOWED = YES
 GENERATE_INFOPLIST_FILE = YES
 LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks @loader_path/../Frameworks
+ONLY_ACTIVE_ARCH = YES
 PRODUCT_BUNDLE_IDENTIFIER = com.minamiktr.mca.tests
 PRODUCT_NAME = MixedCaptureAudioTests
 SWIFT_VERSION = 5.0
