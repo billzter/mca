@@ -424,7 +424,8 @@ Outputs:
 Behavior:
 
 - Regenerate/check the shared-memory ABI mirror.
-- Run Cargo for the selected configuration.
+- In Debug, run Cargo once for the active host architecture.
+- In Release, build both `aarch64-apple-darwin` and `x86_64-apple-darwin`, then merge the static libraries with `lipo`.
 - Copy the generated Rust static library and C ABI header into `Generated/`.
 
 ### `Scripts/manage-installation.sh`
@@ -459,6 +460,10 @@ Output:
 Behavior:
 
 - Build a package payload that installs this project’s app and HAL driver.
+- Starting with version `0.2.x`, release `.pkg` installers support universal macOS architecture.
+- Use Xcode's generic macOS destination for Release package builds so Xcode emits universal native products instead of a host-specific `My Mac` build.
+- Keep non-Release package builds host-architecture focused unless `XCODE_DESTINATION` is explicitly set.
+- Reject Release package builds unless the app executable, HAL driver executable, generated Rust static library, and packaged payload executables contain both `arm64` and `x86_64` slices.
 - Set owner/group/permissions appropriate for `/Library/Audio/Plug-Ins/HAL`.
 - Reject relocatable bundle metadata.
 - With `--sign`, import Developer ID signing identities into a temporary keychain, sign the app, HAL driver, and package, then restore keychain state on exit.

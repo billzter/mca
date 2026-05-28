@@ -49,5 +49,8 @@ jobs:
             -configuration Debug \
             -derivedDataPath Build/XcodeDerivedData
 
+      - name: Install Rust release targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       - name: Build unsigned installer package
         run: CONFIGURATION=Release Scripts/build-package.sh
