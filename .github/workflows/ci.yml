@@ -53,4 +53,4 @@ jobs:
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Build unsigned installer package
-        run: CONFIGURATION=Release Scripts/build-package.sh
+        run: MCA_VERSION=0.0.0 MCA_BUILD_NUMBER=0 CONFIGURATION=Release Scripts/build-package.sh

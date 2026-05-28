@@ -117,14 +117,6 @@ Create or maintain these supporting docs before the corresponding implementation
 - Preserve the same virtual device contract: QuickTime still sees exactly one mixed input.
 - Acceptance: user can choose global system audio or selected app/process audio plus mic, and QuickTime records the mixed result.
 
-### Phase 6: Optional Full Recorder Track
-
-- Only start this after the QuickTime helper and any desired per-app audio routing are working.
-- Reuse the mixer engine.
-- Add ScreenCaptureKit recording with display/window/app selection.
-- Record video plus mixed audio directly to `.mov`.
-- Acceptance: app can produce a screen recording without QuickTime, but this remains a separate product milestone.
-
 ## Public Interfaces
 
 - Virtual Core Audio input device: `Mixed Capture Audio`.

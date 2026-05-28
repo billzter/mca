@@ -163,7 +163,7 @@ protocol LaunchAtStartupControlling: AnyObject {
 
 enum LiveMixerStartResult: Equatable {
     case started
-    case failed
+    case failed(statusCode: Int32)
 }
 
 struct LiveMixerStartConfiguration: Equatable {
