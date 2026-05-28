@@ -282,9 +282,9 @@ final class AppStatusModelTests: XCTestCase {
     }
 
     @MainActor
-    func testLiveMixerStartFailureMarksSystemAudioFailed() async {
+    func testLiveMixerStartFailurePreservesUntestedSystemAudioState() async {
         let controller = FakeLiveMixerController()
-        controller.startResult = .failed
+        controller.startResult = .failed(statusCode: -1)
         let model = AppStatusModel(
             prerequisiteChecker: readyChecker(),
             microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
@@ -297,7 +297,26 @@ final class AppStatusModelTests: XCTestCase {
         assertEqual(controller.startCount, 1)
         assertEqual(model.liveMixerState, .failed)
         assertEqual(model.sessionState, .failed)
-        assertEqual(model.systemAudioAccess, .failed)
+        assertEqual(model.systemAudioAccess, .notTested)
+    }
+
+    @MainActor
+    func testLiveMixerStartFailureExplainsNativeFailureCode() async {
+        let controller = FakeLiveMixerController()
+        controller.startResult = .failed(statusCode: -1)
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller
+        )
+
+        model.refreshPrerequisites()
+
+        assertEqual(
+            model.systemAudioGuidance,
+            "System audio tap blocked. Allow MCA in Screen & System Audio Recording, then check again. (code -1)"
+        )
     }
 
     @MainActor
@@ -1691,7 +1710,7 @@ private final class FakeLiveMixerController: LiveMixerControlling {
         lastStartedMicrophoneID = configuration.microphoneID
         lastStartedConfiguration = configuration
         if automaticallyComplete {
-            isRunning = startResult == .started
+            isRunning = startResult.isStarted
             completion(startResult)
         } else {
             startCompletions.append(completion)
@@ -1728,7 +1747,7 @@ private final class FakeLiveMixerController: LiveMixerControlling {
     @MainActor func completeStart(at index: Int, result: LiveMixerStartResult) {
         let completion = startCompletions[index]
         startCompletions.remove(at: index)
-        isRunning = result == .started
+        isRunning = result.isStarted
         completion(result)
     }
 
@@ -1737,6 +1756,17 @@ private final class FakeLiveMixerController: LiveMixerControlling {
         stopCompletions.remove(at: index)
         isRunning = false
         completion()
+    }
+}
+
+private extension LiveMixerStartResult {
+    var isStarted: Bool {
+        switch self {
+        case .started:
+            true
+        case .failed:
+            false
+        }
     }
 }
 

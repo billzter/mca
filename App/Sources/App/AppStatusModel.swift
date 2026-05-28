@@ -17,6 +17,7 @@ final class AppStatusModel: ObservableObject {
 
     @Published var sessionState: CaptureSessionState = .stopped
     @Published var liveMixerState: LiveMixerState = .stopped
+    @Published private(set) var lastLiveMixerStartFailureCode: Int32?
     @Published var driverStatus: AudioDeviceStatus = .unknown
     @Published var driverUpdateRequirement: DriverUpdateRequirement = .none
     @Published var microphonePermission: PermissionStatus = .unknown
@@ -199,7 +200,7 @@ final class AppStatusModel: ObservableObject {
     }
 
     var canCheckSystemAudioAccess: Bool {
-        switch systemAudioAccess {
+        return switch systemAudioAccess {
         case .starting, .started, .waitingForSignal:
             false
         case .unknown, .notTested, .promptExpected, .receivingAudio, .silent, .proceedUnverified, .deniedOrUnavailable, .failed:
@@ -227,7 +228,10 @@ final class AppStatusModel: ObservableObject {
     }
 
     var systemAudioGuidance: String? {
-        switch systemAudioAccess {
+        if liveMixerState == .failed, let failureCode = lastLiveMixerStartFailureCode {
+            return liveMixerStartFailureGuidance(for: failureCode)
+        }
+        return switch systemAudioAccess {
         case .promptExpected:
             "The next step may show a macOS system audio recording prompt."
         case .waitingForSignal:
@@ -901,14 +905,15 @@ final class AppStatusModel: ObservableObject {
         pendingMixerConfiguration = nil
         switch result {
         case .started:
+            lastLiveMixerStartFailureCode = nil
             runningMixerConfiguration = configuration
             liveMixerState = .running
             liveMixerController.setAudioLevels(audioLevelSettings)
-        case .failed:
+        case let .failed(statusCode):
+            lastLiveMixerStartFailureCode = statusCode
             runningMixerConfiguration = nil
             liveMixerState = .failed
             sessionState = .failed
-            systemAudioAccess = .failed
         }
     }
 
@@ -935,6 +940,17 @@ final class AppStatusModel: ObservableObject {
             LiveMixerMicrophoneID.noMicrophone
         case .none, .usingFallback, .permissionRevoked:
             activeMicrophoneID
+        }
+    }
+
+    private func liveMixerStartFailureGuidance(for statusCode: Int32) -> String {
+        switch statusCode {
+        case -1:
+            "System audio tap blocked. Allow MCA in Screen & System Audio Recording, then check again. (code -1)"
+        case -7:
+            "Selected mic could not start. Check mic selection and permission, then try again. (code -7)"
+        default:
+            "Live mixer could not start. Run Check System Audio, then try again. (code \(statusCode))"
         }
     }
 

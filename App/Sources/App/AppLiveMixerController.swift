@@ -121,7 +121,7 @@ final class AppLiveMixerController: LiveMixerControlling {
                 status = callNative(nil)
             }
             DispatchQueue.main.async {
-                completion(status == 0 ? .started : .failed)
+                completion(status == 0 ? .started : .failed(statusCode: status))
             }
         }
     }
