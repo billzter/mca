@@ -6,39 +6,236 @@
 	objectVersion = 56;
 	objects = {
 
-/* Begin PBXAggregateTarget section */
-		4BCA00000000000000000010 /* MixedCaptureAudioDriver */ = {
-			isa = PBXAggregateTarget;
-			buildConfigurationList = 4BCA00000000000000000050 /* Build configuration list for PBXAggregateTarget "MixedCaptureAudioDriver" */;
-			buildPhases = (
-				4BCA00000000000000000020 /* Build HAL Driver */,
-			);
-			dependencies = (
-			);
-			name = MixedCaptureAudioDriver;
-			productName = MixedCaptureAudioDriver;
+/* Begin PBXBuildFile section */
+		4BCA00000000000000000310 /* HealthDiagnostics.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000210 /* HealthDiagnostics.swift */; };
+		4BCA00000000000000000311 /* PrerequisiteStatus.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000211 /* PrerequisiteStatus.swift */; };
+		4BCA00000000000000000312 /* SetupPresentation.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000212 /* SetupPresentation.swift */; };
+		4BCA00000000000000000313 /* AppPrerequisiteChecker.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000213 /* AppPrerequisiteChecker.swift */; };
+		4BCA00000000000000000314 /* MicrophonePermissionRequester.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000214 /* MicrophonePermissionRequester.swift */; };
+		4BCA00000000000000000315 /* SystemAudioAccessTester.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000215 /* SystemAudioAccessTester.swift */; };
+		4BCA00000000000000000316 /* LaunchAtStartupController.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000216 /* LaunchAtStartupController.swift */; };
+		4BCA00000000000000000317 /* DebouncedMainActorAction.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000217 /* DebouncedMainActorAction.swift */; };
+		4BCA00000000000000000318 /* SourceLevelMeterModel.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000218 /* SourceLevelMeterModel.swift */; };
+		4BCA00000000000000000319 /* SourceLevelMeterPollingController.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000219 /* SourceLevelMeterPollingController.swift */; };
+		4BCA00000000000000000320 /* AppCommandMenu.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000220 /* AppCommandMenu.swift */; };
+		4BCA00000000000000000321 /* AppLiveMixerController.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000221 /* AppLiveMixerController.swift */; };
+		4BCA00000000000000000322 /* AppStatusModel.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000222 /* AppStatusModel.swift */; };
+		4BCA00000000000000000323 /* AppServices.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000223 /* AppServices.swift */; };
+		4BCA00000000000000000324 /* MixedCaptureAudioApp.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000224 /* MixedCaptureAudioApp.swift */; };
+		4BCA00000000000000000325 /* StatusMenuView.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000225 /* StatusMenuView.swift */; };
+		4BCA00000000000000000326 /* SetupView.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000226 /* SetupView.swift */; };
+		4BCA00000000000000000327 /* LiveMixerSession.m in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000227 /* LiveMixerSession.m */; };
+		4BCA00000000000000000328 /* SystemAudioAccessProbe.m in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000228 /* SystemAudioAccessProbe.m */; };
+		4BCA00000000000000000111 /* AppCommandMenuXCTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000101 /* AppCommandMenuXCTests.swift */; };
+		4BCA00000000000000000112 /* AppMicrophoneSelectionStoreTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000103 /* AppMicrophoneSelectionStoreTests.swift */; };
+		4BCA00000000000000000113 /* AppStatusModelTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000104 /* AppStatusModelTests.swift */; };
+		4BCA00000000000000000114 /* DebouncedMainActorActionTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000105 /* DebouncedMainActorActionTests.swift */; };
+		4BCA00000000000000000115 /* HealthDiagnosticsTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000106 /* HealthDiagnosticsTests.swift */; };
+		4BCA00000000000000000116 /* PrerequisiteStatusTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000107 /* PrerequisiteStatusTests.swift */; };
+		4BCA00000000000000000117 /* SetupPresentationTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000108 /* SetupPresentationTests.swift */; };
+		4BCA00000000000000000118 /* SourceLevelMeterModelTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000109 /* SourceLevelMeterModelTests.swift */; };
+		4BCA00000000000000000119 /* SourceLevelMeterPollingControllerTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA0000000000000000010A /* SourceLevelMeterPollingControllerTests.swift */; };
+		4BCA00000000000000000510 /* MixedCaptureAudioDriver.c in Driver Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000520 /* MixedCaptureAudioDriver.c */; };
+		4BCA00000000000000000511 /* MixedAudioSharedMemoryReader.c in Driver Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000521 /* MixedAudioSharedMemoryReader.c */; };
+		4BCA00000000000000000512 /* MixedAudioSharedMemoryProbe.c in Driver Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000522 /* MixedAudioSharedMemoryProbe.c */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4BCA00000000000000000150 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4BCA00000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4BCA00000000000000000060;
+			remoteInfo = MixedCaptureAudioApp;
 		};
-		4BCA00000000000000000060 /* MixedCaptureAudioApp */ = {
-			isa = PBXAggregateTarget;
-			buildConfigurationList = 4BCA00000000000000000080 /* Build configuration list for PBXAggregateTarget "MixedCaptureAudioApp" */;
-			buildPhases = (
-				4BCA00000000000000000070 /* Build App */,
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		4BCA00000000000000000101 /* AppCommandMenuXCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/AppCommandMenuXCTests.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000102 /* MixedCaptureAudioTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MixedCaptureAudioTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4BCA00000000000000000103 /* AppMicrophoneSelectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/AppMicrophoneSelectionStoreTests.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000104 /* AppStatusModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/AppStatusModelTests.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000105 /* DebouncedMainActorActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/DebouncedMainActorActionTests.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000106 /* HealthDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/HealthDiagnosticsTests.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000107 /* PrerequisiteStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/PrerequisiteStatusTests.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000108 /* SetupPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/SetupPresentationTests.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000109 /* SourceLevelMeterModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/SourceLevelMeterModelTests.swift; sourceTree = "<group>"; };
+		4BCA0000000000000000010A /* SourceLevelMeterPollingControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/SourceLevelMeterPollingControllerTests.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000200 /* MixedCaptureAudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MixedCaptureAudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4BCA00000000000000000210 /* HealthDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/Diagnostics/HealthDiagnostics.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000211 /* PrerequisiteStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/PrerequisiteStatus.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000212 /* SetupPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/SetupPresentation.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000213 /* AppPrerequisiteChecker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/AppPrerequisiteChecker.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000214 /* MicrophonePermissionRequester.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/MicrophonePermissionRequester.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000215 /* SystemAudioAccessTester.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/SystemAudioAccessTester.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000216 /* LaunchAtStartupController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/LaunchAtStartupController.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000217 /* DebouncedMainActorAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/DebouncedMainActorAction.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000218 /* SourceLevelMeterModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/SourceLevelMeterModel.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000219 /* SourceLevelMeterPollingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/SourceLevelMeterPollingController.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000220 /* AppCommandMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/AppCommandMenu.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000221 /* AppLiveMixerController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/AppLiveMixerController.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000222 /* AppStatusModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/AppStatusModel.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000223 /* AppServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/AppServices.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000224 /* MixedCaptureAudioApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/MixedCaptureAudioApp.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000225 /* StatusMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/StatusMenuView.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000226 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/SetupView.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000227 /* LiveMixerSession.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = App/Sources/Audio/LiveMixerSession.m; sourceTree = "<group>"; };
+		4BCA00000000000000000228 /* SystemAudioAccessProbe.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = App/Sources/SystemAudio/SystemAudioAccessProbe.m; sourceTree = "<group>"; };
+		4BCA00000000000000000229 /* LiveMixerABI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = App/Sources/Audio/LiveMixerABI.h; sourceTree = "<group>"; };
+		4BCA00000000000000000230 /* App Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = App/Resources/Info.plist; sourceTree = "<group>"; };
+		4BCA00000000000000000231 /* MixedCaptureAudio.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App/MixedCaptureAudio.entitlements; sourceTree = "<group>"; };
+		4BCA00000000000000000500 /* MixedCaptureAudio.driver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MixedCaptureAudio.driver; sourceTree = BUILT_PRODUCTS_DIR; };
+		4BCA00000000000000000520 /* MixedCaptureAudioDriver.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = HALPlugin/Sources/MixedCaptureAudioDriver.c; sourceTree = "<group>"; };
+		4BCA00000000000000000521 /* MixedAudioSharedMemoryReader.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = HALPlugin/Sources/MixedAudioSharedMemoryReader.c; sourceTree = "<group>"; };
+		4BCA00000000000000000522 /* MixedAudioSharedMemoryProbe.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = HALPlugin/Sources/MixedAudioSharedMemoryProbe.c; sourceTree = "<group>"; };
+		4BCA00000000000000000523 /* MixedAudioSharedMemory.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HALPlugin/Include/MixedAudioSharedMemory.h; sourceTree = "<group>"; };
+		4BCA00000000000000000524 /* MixedAudioSharedMemoryReader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HALPlugin/Include/MixedAudioSharedMemoryReader.h; sourceTree = "<group>"; };
+		4BCA00000000000000000525 /* MixedAudioSharedMemoryProbe.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HALPlugin/Include/MixedAudioSharedMemoryProbe.h; sourceTree = "<group>"; };
+		4BCA00000000000000000526 /* MixedCaptureAudioCompatibility.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HALPlugin/Include/MixedCaptureAudioCompatibility.h; sourceTree = "<group>"; };
+		4BCA00000000000000000527 /* Driver Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = HALPlugin/Resources/Info.plist; sourceTree = "<group>"; };
+		4BCA00000000000000000600 /* Project.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = BuildConfig/Project.xcconfig; sourceTree = "<group>"; };
+		4BCA00000000000000000601 /* App.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = BuildConfig/App.xcconfig; sourceTree = "<group>"; };
+		4BCA00000000000000000602 /* App-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "BuildConfig/App-Debug.xcconfig"; sourceTree = "<group>"; };
+		4BCA00000000000000000603 /* App-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "BuildConfig/App-Release.xcconfig"; sourceTree = "<group>"; };
+		4BCA00000000000000000604 /* Driver.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = BuildConfig/Driver.xcconfig; sourceTree = "<group>"; };
+		4BCA00000000000000000605 /* Tests.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = BuildConfig/Tests.xcconfig; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4BCA00000000000000000402 /* App Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
-			dependencies = (
-			);
-			name = MixedCaptureAudioApp;
-			productName = MixedCaptureAudioApp;
+			runOnlyForDeploymentPostprocessing = 0;
 		};
-/* End PBXAggregateTarget section */
+		4BCA00000000000000000121 /* Test Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4BCA00000000000000000502 /* Driver Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		4BCA00000000000000000030 = {
 			isa = PBXGroup;
 			children = (
+				4BCA00000000000000000200 /* MixedCaptureAudio.app */,
+				4BCA00000000000000000102 /* MixedCaptureAudioTests.xctest */,
+				4BCA00000000000000000500 /* MixedCaptureAudio.driver */,
+				4BCA00000000000000000210 /* HealthDiagnostics.swift */,
+				4BCA00000000000000000211 /* PrerequisiteStatus.swift */,
+				4BCA00000000000000000212 /* SetupPresentation.swift */,
+				4BCA00000000000000000213 /* AppPrerequisiteChecker.swift */,
+				4BCA00000000000000000214 /* MicrophonePermissionRequester.swift */,
+				4BCA00000000000000000215 /* SystemAudioAccessTester.swift */,
+				4BCA00000000000000000216 /* LaunchAtStartupController.swift */,
+				4BCA00000000000000000217 /* DebouncedMainActorAction.swift */,
+				4BCA00000000000000000218 /* SourceLevelMeterModel.swift */,
+				4BCA00000000000000000219 /* SourceLevelMeterPollingController.swift */,
+				4BCA00000000000000000220 /* AppCommandMenu.swift */,
+				4BCA00000000000000000221 /* AppLiveMixerController.swift */,
+				4BCA00000000000000000222 /* AppStatusModel.swift */,
+				4BCA00000000000000000223 /* AppServices.swift */,
+				4BCA00000000000000000224 /* MixedCaptureAudioApp.swift */,
+				4BCA00000000000000000225 /* StatusMenuView.swift */,
+				4BCA00000000000000000226 /* SetupView.swift */,
+				4BCA00000000000000000227 /* LiveMixerSession.m */,
+				4BCA00000000000000000228 /* SystemAudioAccessProbe.m */,
+				4BCA00000000000000000229 /* LiveMixerABI.h */,
+				4BCA00000000000000000230 /* App Info.plist */,
+				4BCA00000000000000000231 /* MixedCaptureAudio.entitlements */,
+				4BCA00000000000000000101 /* AppCommandMenuXCTests.swift */,
+				4BCA00000000000000000103 /* AppMicrophoneSelectionStoreTests.swift */,
+				4BCA00000000000000000104 /* AppStatusModelTests.swift */,
+				4BCA00000000000000000105 /* DebouncedMainActorActionTests.swift */,
+				4BCA00000000000000000106 /* HealthDiagnosticsTests.swift */,
+				4BCA00000000000000000107 /* PrerequisiteStatusTests.swift */,
+				4BCA00000000000000000108 /* SetupPresentationTests.swift */,
+				4BCA00000000000000000109 /* SourceLevelMeterModelTests.swift */,
+				4BCA0000000000000000010A /* SourceLevelMeterPollingControllerTests.swift */,
+				4BCA00000000000000000520 /* MixedCaptureAudioDriver.c */,
+				4BCA00000000000000000521 /* MixedAudioSharedMemoryReader.c */,
+				4BCA00000000000000000522 /* MixedAudioSharedMemoryProbe.c */,
+				4BCA00000000000000000523 /* MixedAudioSharedMemory.h */,
+				4BCA00000000000000000524 /* MixedAudioSharedMemoryReader.h */,
+				4BCA00000000000000000525 /* MixedAudioSharedMemoryProbe.h */,
+				4BCA00000000000000000526 /* MixedCaptureAudioCompatibility.h */,
+				4BCA00000000000000000527 /* Driver Info.plist */,
+				4BCA00000000000000000600 /* Project.xcconfig */,
+				4BCA00000000000000000601 /* App.xcconfig */,
+				4BCA00000000000000000602 /* App-Debug.xcconfig */,
+				4BCA00000000000000000603 /* App-Release.xcconfig */,
+				4BCA00000000000000000604 /* Driver.xcconfig */,
+				4BCA00000000000000000605 /* Tests.xcconfig */,
 			);
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4BCA00000000000000000010 /* MixedCaptureAudioDriver */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4BCA00000000000000000050 /* Build configuration list for PBXNativeTarget "MixedCaptureAudioDriver" */;
+			buildPhases = (
+				4BCA00000000000000000501 /* Driver Sources */,
+				4BCA00000000000000000502 /* Driver Frameworks */,
+				4BCA00000000000000000503 /* Driver Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MixedCaptureAudioDriver;
+			productName = MixedCaptureAudio;
+			productReference = 4BCA00000000000000000500 /* MixedCaptureAudio.driver */;
+			productType = "com.apple.product-type.bundle";
+		};
+		4BCA00000000000000000060 /* MixedCaptureAudioApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4BCA00000000000000000080 /* Build configuration list for PBXNativeTarget "MixedCaptureAudioApp" */;
+			buildPhases = (
+				4BCA00000000000000000404 /* Build Rust Audio Engine */,
+				4BCA00000000000000000401 /* App Sources */,
+				4BCA00000000000000000402 /* App Frameworks */,
+				4BCA00000000000000000403 /* App Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MixedCaptureAudioApp;
+			productName = MixedCaptureAudio;
+			productReference = 4BCA00000000000000000200 /* MixedCaptureAudio.app */;
+			productType = "com.apple.product-type.application";
+		};
+		4BCA00000000000000000130 /* MixedCaptureAudioTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4BCA00000000000000000140 /* Build configuration list for PBXNativeTarget "MixedCaptureAudioTests" */;
+			buildPhases = (
+				4BCA00000000000000000120 /* Test Sources */,
+				4BCA00000000000000000121 /* Test Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4BCA00000000000000000151 /* PBXTargetDependency */,
+			);
+			name = MixedCaptureAudioTests;
+			productName = MixedCaptureAudioTests;
+			productReference = 4BCA00000000000000000102 /* MixedCaptureAudioTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
 		4BCA00000000000000000001 /* Project object */ = {
@@ -61,36 +258,93 @@
 			targets = (
 				4BCA00000000000000000010 /* MixedCaptureAudioDriver */,
 				4BCA00000000000000000060 /* MixedCaptureAudioApp */,
+				4BCA00000000000000000130 /* MixedCaptureAudioTests */,
 			);
 		};
 /* End PBXProject section */
 
-/* Begin PBXShellScriptBuildPhase section */
-		4BCA00000000000000000020 /* Build HAL Driver */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
+/* Begin PBXResourcesBuildPhase section */
+		4BCA00000000000000000403 /* App Resources */ = {
+			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(PROJECT_DIR)/HALPlugin/Sources/MixedCaptureAudioDriver.c",
-				"$(PROJECT_DIR)/HALPlugin/Include/MixedAudioSharedMemory.h",
-				"$(PROJECT_DIR)/HALPlugin/Resources/Info.plist",
-				"$(PROJECT_DIR)/Scripts/build-hal-driver.sh",
-			);
-			name = "Build HAL Driver";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(PROJECT_DIR)/Build/$(CONFIGURATION)/MixedCaptureAudio.driver",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "Scripts/build-hal-driver.sh";
 		};
-		4BCA00000000000000000070 /* Build App */ = {
+		4BCA00000000000000000503 /* Driver Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4BCA00000000000000000501 /* Driver Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4BCA00000000000000000510 /* MixedCaptureAudioDriver.c in Driver Sources */,
+				4BCA00000000000000000511 /* MixedAudioSharedMemoryReader.c in Driver Sources */,
+				4BCA00000000000000000512 /* MixedAudioSharedMemoryProbe.c in Driver Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4BCA00000000000000000401 /* App Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4BCA00000000000000000310 /* HealthDiagnostics.swift in App Sources */,
+				4BCA00000000000000000311 /* PrerequisiteStatus.swift in App Sources */,
+				4BCA00000000000000000312 /* SetupPresentation.swift in App Sources */,
+				4BCA00000000000000000313 /* AppPrerequisiteChecker.swift in App Sources */,
+				4BCA00000000000000000314 /* MicrophonePermissionRequester.swift in App Sources */,
+				4BCA00000000000000000315 /* SystemAudioAccessTester.swift in App Sources */,
+				4BCA00000000000000000316 /* LaunchAtStartupController.swift in App Sources */,
+				4BCA00000000000000000317 /* DebouncedMainActorAction.swift in App Sources */,
+				4BCA00000000000000000318 /* SourceLevelMeterModel.swift in App Sources */,
+				4BCA00000000000000000319 /* SourceLevelMeterPollingController.swift in App Sources */,
+				4BCA00000000000000000320 /* AppCommandMenu.swift in App Sources */,
+				4BCA00000000000000000321 /* AppLiveMixerController.swift in App Sources */,
+				4BCA00000000000000000322 /* AppStatusModel.swift in App Sources */,
+				4BCA00000000000000000323 /* AppServices.swift in App Sources */,
+				4BCA00000000000000000324 /* MixedCaptureAudioApp.swift in App Sources */,
+				4BCA00000000000000000325 /* StatusMenuView.swift in App Sources */,
+				4BCA00000000000000000326 /* SetupView.swift in App Sources */,
+				4BCA00000000000000000327 /* LiveMixerSession.m in App Sources */,
+				4BCA00000000000000000328 /* SystemAudioAccessProbe.m in App Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4BCA00000000000000000120 /* Test Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4BCA00000000000000000111 /* AppCommandMenuXCTests.swift in Test Sources */,
+				4BCA00000000000000000112 /* AppMicrophoneSelectionStoreTests.swift in Test Sources */,
+				4BCA00000000000000000113 /* AppStatusModelTests.swift in Test Sources */,
+				4BCA00000000000000000114 /* DebouncedMainActorActionTests.swift in Test Sources */,
+				4BCA00000000000000000115 /* HealthDiagnosticsTests.swift in Test Sources */,
+				4BCA00000000000000000116 /* PrerequisiteStatusTests.swift in Test Sources */,
+				4BCA00000000000000000117 /* SetupPresentationTests.swift in Test Sources */,
+				4BCA00000000000000000118 /* SourceLevelMeterModelTests.swift in Test Sources */,
+				4BCA00000000000000000119 /* SourceLevelMeterPollingControllerTests.swift in Test Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4BCA00000000000000000151 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4BCA00000000000000000060 /* MixedCaptureAudioApp */;
+			targetProxy = 4BCA00000000000000000150 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4BCA00000000000000000404 /* Build Rust Audio Engine */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -99,85 +353,79 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(PROJECT_DIR)/App/Sources/Diagnostics/HealthDiagnostics.swift",
-				"$(PROJECT_DIR)/App/Sources/App/PrerequisiteStatus.swift",
-				"$(PROJECT_DIR)/App/Sources/App/SetupPresentation.swift",
-				"$(PROJECT_DIR)/App/Sources/App/AppPrerequisiteChecker.swift",
-				"$(PROJECT_DIR)/App/Sources/App/MicrophonePermissionRequester.swift",
-				"$(PROJECT_DIR)/App/Sources/App/SystemAudioAccessTester.swift",
-				"$(PROJECT_DIR)/App/Sources/App/DebouncedMainActorAction.swift",
-				"$(PROJECT_DIR)/App/Sources/App/AppLiveMixerController.swift",
-				"$(PROJECT_DIR)/App/Sources/App/AppStatusModel.swift",
-				"$(PROJECT_DIR)/App/Sources/App/AppServices.swift",
-				"$(PROJECT_DIR)/App/Sources/App/MixedCaptureAudioApp.swift",
-				"$(PROJECT_DIR)/App/Sources/App/StatusMenuView.swift",
-				"$(PROJECT_DIR)/App/Sources/App/SetupView.swift",
-				"$(PROJECT_DIR)/App/Sources/Audio/LiveMixerABI.h",
-				"$(PROJECT_DIR)/App/Sources/Audio/LiveMixerSession.m",
-				"$(PROJECT_DIR)/App/Sources/SystemAudio/SystemAudioAccessProbe.m",
 				"$(PROJECT_DIR)/Rust/mixed-audio-engine/src/lib.rs",
 				"$(PROJECT_DIR)/Rust/mixed-audio-engine/src/engine.rs",
+				"$(PROJECT_DIR)/Rust/mixed-audio-engine/src/session.rs",
 				"$(PROJECT_DIR)/Rust/mixed-audio-engine/src/shared_memory.rs",
-				"$(PROJECT_DIR)/App/Resources/Info.plist",
 				"$(PROJECT_DIR)/Scripts/build-rust-engine.sh",
-				"$(PROJECT_DIR)/Scripts/build-app.sh",
 			);
-			name = "Build App";
+			name = "Build Rust Audio Engine";
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(PROJECT_DIR)/Build/$(CONFIGURATION)/MixedCaptureAudio.app",
+				"$(PROJECT_DIR)/Generated/include/MixedAudioEngine.h",
+				"$(PROJECT_DIR)/Generated/lib/$(RUST_PROFILE_DIR)/libmixed_audio_engine.a",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "Scripts/build-app.sh";
+			shellScript = "CONFIGURATION=\"$CONFIGURATION\" Scripts/build-rust-engine.sh";
 		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
 		4BCA00000000000000000041 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA00000000000000000600 /* Project.xcconfig */;
 			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				MACOSX_DEPLOYMENT_TARGET = 14.2;
-				PRODUCT_NAME = MixedCaptureAudio;
 			};
 			name = Debug;
 		};
 		4BCA00000000000000000042 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA00000000000000000600 /* Project.xcconfig */;
 			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				MACOSX_DEPLOYMENT_TARGET = 14.2;
-				PRODUCT_NAME = MixedCaptureAudio;
 			};
 			name = Release;
 		};
 		4BCA00000000000000000051 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA00000000000000000604 /* Driver.xcconfig */;
 			buildSettings = {
-				PRODUCT_NAME = MixedCaptureAudioDriver;
 			};
 			name = Debug;
 		};
 		4BCA00000000000000000052 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA00000000000000000604 /* Driver.xcconfig */;
 			buildSettings = {
-				PRODUCT_NAME = MixedCaptureAudioDriver;
 			};
 			name = Release;
 		};
 		4BCA00000000000000000081 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA00000000000000000602 /* App-Debug.xcconfig */;
 			buildSettings = {
-				PRODUCT_NAME = MixedCaptureAudioApp;
 			};
 			name = Debug;
 		};
 		4BCA00000000000000000082 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA00000000000000000603 /* App-Release.xcconfig */;
 			buildSettings = {
-				PRODUCT_NAME = MixedCaptureAudioApp;
+			};
+			name = Release;
+		};
+		4BCA00000000000000000141 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA00000000000000000605 /* Tests.xcconfig */;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		4BCA00000000000000000142 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA00000000000000000605 /* Tests.xcconfig */;
+			buildSettings = {
 			};
 			name = Release;
 		};
@@ -193,7 +441,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		4BCA00000000000000000050 /* Build configuration list for PBXAggregateTarget "MixedCaptureAudioDriver" */ = {
+		4BCA00000000000000000050 /* Build configuration list for PBXNativeTarget "MixedCaptureAudioDriver" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				4BCA00000000000000000051 /* Debug */,
@@ -202,11 +450,20 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		4BCA00000000000000000080 /* Build configuration list for PBXAggregateTarget "MixedCaptureAudioApp" */ = {
+		4BCA00000000000000000080 /* Build configuration list for PBXNativeTarget "MixedCaptureAudioApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				4BCA00000000000000000081 /* Debug */,
 				4BCA00000000000000000082 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4BCA00000000000000000140 /* Build configuration list for PBXNativeTarget "MixedCaptureAudioTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4BCA00000000000000000141 /* Debug */,
+				4BCA00000000000000000142 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

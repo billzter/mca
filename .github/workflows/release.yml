@@ -28,6 +28,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Decode release secret files
@@ -38,7 +39,7 @@ jobs:
           MCA_INSTALLER_CERT_BASE64: ${{ secrets.MCA_INSTALLER_CERT_BASE64 }}
           MCA_NOTARY_KEY_BASE64: ${{ secrets.MCA_NOTARY_KEY_BASE64 }}
         run: |
-          Scripts/decode-release-secret-files.sh
+          Scripts/release-support.sh decode-secrets
           curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o .Secrets/DeveloperIDG2CA.cer
           curl -fsSL https://www.apple.com/appleca/AppleIncRootCertificate.cer -o .Secrets/AppleIncRootCertificate.cer
 
@@ -54,7 +55,7 @@ jobs:
 
           MCA_PUBLIC_CERT_KEYCHAIN="$PUBLIC_CERT_KEYCHAIN" \
             MCA_SKIP_PUBLIC_CERT_VERIFY=1 \
-            Scripts/install-public-signing-certs.sh
+            Scripts/release-support.sh install-public-certs
 
       - name: Build signed notarized package
         env:
@@ -69,10 +70,12 @@ jobs:
           MCA_BUILD_NUMBER: ${{ inputs.build }}
         run: |
           if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
-            Scripts/mca-build release-notarized
-          else
-            Scripts/mca-build release-notarized --version "$MCA_VERSION" --build "$MCA_BUILD_NUMBER"
+            MCA_VERSION="${GITHUB_REF_NAME#v}"
+            MCA_BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
           fi
+          export MCA_VERSION
+          export MCA_BUILD_NUMBER
+          CONFIGURATION=Release Scripts/build-package.sh --sign --notarize
 
       - name: Check package signature and staple
         run: |
@@ -94,7 +97,7 @@ jobs:
         env:
           INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          Scripts/resolve-release-tag.sh
+          Scripts/release-support.sh resolve-tag
 
       - name: Upload package to GitHub Release
         env:
@@ -104,7 +107,9 @@ jobs:
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
               --title "$RELEASE_TAG" \
-              --notes "Notarized MixedCaptureAudio package for $RELEASE_TAG"
+              --generate-notes
+          else
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG"
           fi
           gh release upload "$RELEASE_TAG" Build/Packages/*.pkg --clobber
 

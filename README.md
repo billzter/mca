@@ -56,34 +56,25 @@ The helper is an `LSUIElement` menu-bar app. Closing the setup window leaves the
 
 ## Development
 
-Run the full local verification surface:
+Run the native test/build checks directly:
 
 ```sh
-Scripts/mca-build verify
+cargo test --manifest-path Rust/mixed-audio-engine/Cargo.toml
+xcodebuild test -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioTests -configuration Debug
 ```
 
 Build the app, HAL driver, and unsigned installer package:
 
 ```sh
-Scripts/build-app.sh
-Scripts/build-hal-driver.sh
-Scripts/mca-build package
+xcodebuild build -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioApp -configuration Debug -derivedDataPath Build/XcodeDerivedData
+xcodebuild build -project MixedCaptureAudio.xcodeproj -scheme MixedCaptureAudioDriver -configuration Debug -derivedDataPath Build/XcodeDerivedData
+Scripts/build-package.sh
 ```
 
 Build release artifacts when signing and notarization credentials are configured:
 
 ```sh
-Scripts/mca-build release --version 0.0.4 --build 123
-Scripts/mca-build release-notarized --version 0.0.4 --build 123
-```
-
-Useful focused checks:
-
-```sh
-Scripts/validate-rust-engine.sh
-Scripts/validate-app.sh
-Scripts/validate-build-system.sh
-Scripts/validate-packaging.sh
+MCA_VERSION=0.0.4 MCA_BUILD_NUMBER=123 CONFIGURATION=Release Scripts/build-package.sh --sign --notarize
 ```
 
 ## Repository Map
@@ -94,7 +85,7 @@ Scripts/validate-packaging.sh
 | `App/Sources/Audio/LiveMixerSession.m` | Objective-C capture bridge between Swift, Core Audio, microphone capture, and Rust |
 | `Rust/mixed-audio-engine/` | Mixer, source queues, shared-memory writer, health counters, and Rust tests |
 | `HALPlugin/` | C AudioServerPlugIn virtual input device and shared-memory reader |
-| `Scripts/` | Build, validation, package, signing, notarization, install, and uninstall helpers |
+| `Scripts/` | Minimal build, package, signing, notarization, install, and uninstall plumbing |
 | `docs/` | Architecture, release, permissions, diagnostics, and verification notes |
 
 ## Privacy
@@ -112,7 +103,7 @@ If system audio is not detected, make sure something audible and unmuted is play
 To uninstall while preserving macOS privacy decisions:
 
 ```sh
-Scripts/uninstall-mca.sh
+Scripts/manage-installation.sh uninstall
 ```
 
 To reset local app preferences:

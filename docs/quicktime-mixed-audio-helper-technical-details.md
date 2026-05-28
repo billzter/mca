@@ -10,7 +10,7 @@ Recommended stack:
 - **Rust**: mixer engine, ring buffers, gain, limiting, counters, testable audio logic.
 - **C**: minimal HAL AudioServerPlugIn boundary.
 - **Objective-C++**: optional glue only if Swift-to-C ABI integration becomes awkward.
-- **Shell/Xcode scripts**: build orchestration, install/uninstall, signing, notarization.
+- **Scripts only where unavoidable**: Rust boundary generation/build, installer packaging, signing, notarization, install/uninstall, and Core Audio reload.
 
 ## Architecture
 
@@ -62,7 +62,7 @@ Privacy rule: `MixedCaptureAudio` is not a recorder. It should not store mic aud
 | Shared-memory transport | Rust writer + C reader | App writes through Rust; HAL reads through minimal C code |
 | HAL virtual input device | C | Core Audio plug-in ABI is C-shaped |
 | Swift/Rust interop | C ABI, optional Objective-C++ | Boring, stable boundary |
-| Installer/signing scripts | Shell/Xcode | Apple tooling integration |
+| Installer/signing scripts | Shell/Xcode only where unavoidable | Apple tooling integration |
 
 ## Rust Integration Plan
 
@@ -176,7 +176,7 @@ Sample-rate and drift rules:
 
 ## Build Process
 
-Rust support in Apple development is workable but not first-class. Expect a custom Xcode build phase.
+Rust support in Apple development is workable but not first-class. Expect a custom Xcode build phase at the Rust boundary. Do not let that exception spread into the Swift app build or Swift tests: Xcode should own Apple product targets, XCTest should own Swift unit tests, and Swift dependencies should be declared through Xcode or Swift Package Manager.
 
 Build flow:
 
@@ -188,13 +188,16 @@ Build flow:
 6. Link the HAL plug-in against C/CoreAudio plus the minimal shared-memory reader only.
 7. Sign and notarize the final app and HAL driver bundle.
 
-This is manageable, but it adds real build orchestration. The benefit is worth it for the mixer engine, less worth it for the HAL plug-in itself.
+This is manageable, but it adds real build orchestration. The benefit is worth it for the mixer engine, less worth it for the HAL plug-in itself. The orchestration must remain a narrow bridge around external tools; it must not replace native Xcode targets, schemes, test plans, framework links, Info.plist handling, entitlements, or XCTest bundles for Apple code.
 
 ## Best Practices
 
 ### Swift
 
 - Use Swift for UI, settings, permissions, diagnostics, and lifecycle only.
+- Build Swift/AppKit/SwiftUI code through native Xcode targets.
+- Test Swift app logic through XCTest bundles, not standalone `@main` test executables.
+- Manage Swift dependencies through Xcode/Swift Package Manager.
 - Keep UI state on `@MainActor`.
 - Pass immutable config snapshots into the audio layer.
 - Avoid Swift concurrency in callback-adjacent paths.

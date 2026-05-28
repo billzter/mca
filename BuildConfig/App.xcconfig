@@ -1,0 +1,10 @@
+CLANG_ENABLE_OBJC_ARC = YES
+CODE_SIGN_ENTITLEMENTS = App/MixedCaptureAudio.entitlements
+HEADER_SEARCH_PATHS = $(PROJECT_DIR)/App/Sources/Audio $(PROJECT_DIR)/Generated/include $(PROJECT_DIR)/HALPlugin/Include
+INFOPLIST_FILE = App/Resources/Info.plist
+LD_RUNPATH_SEARCH_PATHS = $(inherited) @executable_path/../Frameworks
+OTHER_CFLAGS = -Wall -Wextra -Werror
+OTHER_LDFLAGS = $(PROJECT_DIR)/Generated/lib/$(RUST_PROFILE_DIR)/libmixed_audio_engine.a -framework SwiftUI -framework AppKit -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework ServiceManagement -framework Foundation
+PRODUCT_BUNDLE_IDENTIFIER = com.minamiktr.mca
+PRODUCT_NAME = MixedCaptureAudio
+SWIFT_VERSION = 5.0
