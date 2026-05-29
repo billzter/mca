@@ -39,6 +39,7 @@ final class AppStatusModel: ObservableObject {
     @Published var selectedAppBundleIDs: [String] = []
     @Published var audioLevelSettings: AudioLevelSettings
     @Published var lastHealthSnapshot: HealthSnapshot = .empty
+    @Published private(set) var recentHealthSummary: RecentHealthSummary = .noActiveSession
     @Published var sharedRingStats: SharedRingStats = .empty
     @Published var launchAtStartupStatus: LaunchAtStartupStatus = .unknown
     @Published var launchAtStartupErrorMessage: String?
@@ -48,6 +49,7 @@ final class AppStatusModel: ObservableObject {
     private var lastKnownSelectedMicrophoneName: String?
     private var knownMicrophoneNames: [String: String] = [:]
     private var knownAppAudioSourceNames: [String: String] = [:]
+    private var recentHealthAccumulator = RecentHealthAccumulator()
     private var sharedRingStatsAccumulator = SharedRingStatsAccumulator()
     private var pendingSelectedAppRestoreFallbacks: [String: Int] = [:]
     private let selectedAppRestoreFallbackRecoveryPasses = 3
@@ -90,8 +92,8 @@ final class AppStatusModel: ObservableObject {
     }
 
     var menuBarSystemImage: String {
-        switch healthSummary.severity {
-        case .good:
+        switch recentHealthSummary.severity {
+        case .neutral, .healthy:
             "waveform"
         case .degraded:
             "waveform.badge.exclamationmark"
@@ -225,6 +227,43 @@ final class AppStatusModel: ObservableObject {
         case .failed:
             "Failed"
         }
+    }
+
+    var statusMenuActions: [MenuActionPresentation] {
+        var actions: [MenuActionPresentation] = []
+        if canRequestMicrophoneAccess {
+            actions.append(
+                MenuActionPresentation(
+                    action: .requestMicrophoneAccess,
+                    title: "Request Microphone Access",
+                    systemImageName: "mic"
+                )
+            )
+        }
+        if canCheckSystemAudioAccess {
+            actions.append(
+                MenuActionPresentation(
+                    action: .checkSystemAudio,
+                    title: "Check System Audio",
+                    systemImageName: "speaker.wave.2"
+                )
+            )
+        }
+        actions.append(
+            MenuActionPresentation(
+                action: .openSetup,
+                title: "Open Setup",
+                systemImageName: "slider.horizontal.3"
+            )
+        )
+        actions.append(
+            MenuActionPresentation(
+                action: .quit,
+                title: "Quit",
+                systemImageName: "power"
+            )
+        )
+        return actions
     }
 
     var systemAudioGuidance: String? {
@@ -494,6 +533,10 @@ final class AppStatusModel: ObservableObject {
 
     func refreshLiveMixerHealth() {
         guard let snapshot = liveMixerController.currentHealthSnapshot() else {
+            let recentSummary = recentHealthAccumulator.reset()
+            if recentHealthSummary != recentSummary {
+                recentHealthSummary = recentSummary
+            }
             sharedRingStatsAccumulator.reset()
             sharedRingStats = .empty
             if lastHealthSnapshot != .empty {
@@ -504,12 +547,20 @@ final class AppStatusModel: ObservableObject {
         if snapshot != lastHealthSnapshot {
             lastHealthSnapshot = snapshot
         }
+        let recorderActive = liveMixerController.isVirtualAudioDeviceRunning()
+        let recentSummary = recentHealthAccumulator.record(
+            snapshot: snapshot,
+            recorderActive: recorderActive
+        )
+        if recentHealthSummary != recentSummary {
+            recentHealthSummary = recentSummary
+        }
         if snapshot.framesMixed == 0 {
             sharedRingStatsAccumulator.reset()
         } else {
             sharedRingStatsAccumulator.record(
                 snapshot: snapshot,
-                recorderActive: liveMixerController.isVirtualAudioDeviceRunning()
+                recorderActive: recorderActive
             )
         }
         if sharedRingStats != sharedRingStatsAccumulator.summary {
