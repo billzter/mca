@@ -36,6 +36,122 @@ final class HealthDiagnosticsTests: XCTestCase {
         assertFalse(summary.userVisibleFindings.map(\.name).contains("Audio Callback Error"))
     }
 
+    func testRecentHealthIgnoresCountersThatWereAlreadyPresentInsideWindow() {
+        var accumulator = RecentHealthAccumulator(windowDuration: 5)
+        var baseline = HealthSnapshot.cleanRunning
+        baseline.micUnderrunFrames = 512
+        _ = accumulator.record(
+            snapshot: baseline,
+            at: Date(timeIntervalSinceReferenceDate: 10)
+        )
+
+        var latest = baseline
+        latest.framesMixed += 48_000
+        let summary = accumulator.record(
+            snapshot: latest,
+            at: Date(timeIntervalSinceReferenceDate: 11)
+        )
+
+        XCTAssertEqual(summary.severity, .healthy)
+        XCTAssertEqual(summary.title, "Healthy")
+        XCTAssertEqual(summary.detail, nil)
+    }
+
+    func testRecentHealthReportsNewMicUnderrunAsDegraded() {
+        var accumulator = RecentHealthAccumulator(windowDuration: 5)
+        _ = accumulator.record(
+            snapshot: .cleanRunning,
+            at: Date(timeIntervalSinceReferenceDate: 10)
+        )
+
+        var latest = HealthSnapshot.cleanRunning
+        latest.framesMixed += 48_000
+        latest.micUnderrunFrames = 512
+        let summary = accumulator.record(
+            snapshot: latest,
+            at: Date(timeIntervalSinceReferenceDate: 11)
+        )
+
+        XCTAssertEqual(summary.severity, .degraded)
+        XCTAssertEqual(summary.title, "Degraded")
+        XCTAssertEqual(summary.detail, "Microphone underrun")
+    }
+
+    func testRecentHealthReportsNewCallbackErrorAsFailed() {
+        var accumulator = RecentHealthAccumulator(windowDuration: 5)
+        _ = accumulator.record(
+            snapshot: .cleanRunning,
+            at: Date(timeIntervalSinceReferenceDate: 10)
+        )
+
+        var latest = HealthSnapshot.cleanRunning
+        latest.callbackErrorCount = 1
+        let summary = accumulator.record(
+            snapshot: latest,
+            at: Date(timeIntervalSinceReferenceDate: 11)
+        )
+
+        XCTAssertEqual(summary.severity, .failed)
+        XCTAssertEqual(summary.title, "Failed")
+        XCTAssertEqual(summary.detail, "Audio callback error")
+    }
+
+    func testRecentHealthResetReportsNoActiveSession() {
+        var accumulator = RecentHealthAccumulator(windowDuration: 5)
+        _ = accumulator.record(
+            snapshot: .cleanRunning,
+            at: Date(timeIntervalSinceReferenceDate: 10)
+        )
+
+        let summary = accumulator.reset()
+
+        XCTAssertEqual(summary, .noActiveSession)
+    }
+
+    func testRecentHealthIgnoresSharedRingOverrunWhileWaitingForRecorder() {
+        var accumulator = RecentHealthAccumulator(windowDuration: 5)
+        _ = accumulator.record(
+            snapshot: .cleanRunning,
+            at: Date(timeIntervalSinceReferenceDate: 10)
+        )
+
+        var latest = HealthSnapshot.cleanRunning
+        latest.sharedRingFillFrames = 120_000
+        latest.sharedRingFillErrorFrames = 96_000
+        latest.sharedRingFillErrorAbsFrames = 96_000
+        latest.sharedRingOverrunFrames = 91_200
+        let summary = accumulator.record(
+            snapshot: latest,
+            at: Date(timeIntervalSinceReferenceDate: 11)
+        )
+
+        XCTAssertEqual(summary.severity, .healthy)
+        XCTAssertEqual(summary.title, "Healthy")
+    }
+
+    func testRecentHealthIgnoresSharedRingOverrunWhenNoRecorderIsActive() {
+        var accumulator = RecentHealthAccumulator(windowDuration: 5)
+        _ = accumulator.record(
+            snapshot: .cleanRunning,
+            at: Date(timeIntervalSinceReferenceDate: 10),
+            recorderActive: false
+        )
+
+        var latest = HealthSnapshot.cleanRunning
+        latest.sharedRingFillFrames = 12_000
+        latest.sharedRingFillErrorFrames = 9_600
+        latest.sharedRingFillErrorAbsFrames = 9_600
+        latest.sharedRingOverrunFrames = 91_200
+        let summary = accumulator.record(
+            snapshot: latest,
+            at: Date(timeIntervalSinceReferenceDate: 11),
+            recorderActive: false
+        )
+
+        XCTAssertEqual(summary.severity, .healthy)
+        XCTAssertEqual(summary.title, "Healthy")
+    }
+
     func testCallbackErrorsAreFailedAndUserVisible() {
         var snapshot = HealthSnapshot.cleanRunning
         snapshot.callbackErrorCount = 1
@@ -232,19 +348,19 @@ extension HealthSnapshot {
 
 private func assertEqual<T: Equatable>(_ actual: T, _ expected: T, file: StaticString = #file, line: UInt = #line) {
     if actual != expected {
-        fatalError("Expected \(expected), got \(actual)", file: file, line: line)
+        XCTFail("Expected \(expected), got \(actual)", file: file, line: line)
     }
 }
 
 private func assertContains<S: Sequence>(_ values: S, _ expected: S.Element, file: StaticString = #file, line: UInt = #line) where S.Element: Equatable {
     if !values.contains(expected) {
-        fatalError("Expected sequence to contain \(expected)", file: file, line: line)
+        XCTFail("Expected sequence to contain \(expected)", file: file, line: line)
     }
 }
 
 private func assertStringContains(_ value: String, _ expected: String, file: StaticString = #file, line: UInt = #line) {
     if !value.contains(expected) {
-        fatalError("Expected string to contain \(expected)", file: file, line: line)
+        XCTFail("Expected string to contain \(expected)", file: file, line: line)
     }
 }
 

@@ -6,6 +6,8 @@ enum HealthSeverity: String, Equatable {
     case failed = "Failed"
 }
 
+private let sharedRingWaitingForRecorderErrorThresholdFrames: UInt32 = 48_000
+
 struct HealthSnapshot: Equatable {
     var framesMixed: UInt64
     var systemUnderrunFrames: UInt64
@@ -24,6 +26,113 @@ struct HealthSnapshot: Equatable {
     var sharedRingFillErrorFrames: Int32 = 0
     var sharedRingFillErrorAbsFrames: UInt32 = 0
     var sharedRingOverrunFrames: UInt64 = 0
+}
+
+struct RecentHealthSummary: Equatable {
+    enum Severity: Equatable {
+        case neutral
+        case healthy
+        case degraded
+        case failed
+    }
+
+    static let noActiveSession = RecentHealthSummary(
+        severity: .neutral,
+        title: "No active session",
+        detail: nil
+    )
+    static let healthy = RecentHealthSummary(
+        severity: .healthy,
+        title: "Healthy",
+        detail: nil
+    )
+
+    let severity: Severity
+    let title: String
+    let detail: String?
+}
+
+struct RecentHealthAccumulator {
+    private struct Sample: Equatable {
+        let date: Date
+        let snapshot: HealthSnapshot
+    }
+
+    private let windowDuration: TimeInterval
+    private var samples: [Sample] = []
+    private(set) var summary: RecentHealthSummary = .noActiveSession
+
+    init(windowDuration: TimeInterval = 8) {
+        self.windowDuration = max(1, windowDuration)
+    }
+
+    mutating func record(
+        snapshot: HealthSnapshot,
+        at date: Date = Date(),
+        recorderActive: Bool = true
+    ) -> RecentHealthSummary {
+        samples.append(Sample(date: date, snapshot: snapshot))
+        pruneSamples(relativeTo: date)
+
+        guard let baseline = samples.first?.snapshot, let latest = samples.last?.snapshot else {
+            summary = .noActiveSession
+            return summary
+        }
+
+        summary = Self.summary(baseline: baseline, latest: latest, recorderActive: recorderActive)
+        return summary
+    }
+
+    mutating func reset() -> RecentHealthSummary {
+        samples.removeAll(keepingCapacity: true)
+        summary = .noActiveSession
+        return summary
+    }
+
+    private mutating func pruneSamples(relativeTo date: Date) {
+        samples.removeAll { sample in
+            date.timeIntervalSince(sample.date) > windowDuration
+        }
+    }
+
+    private static func summary(
+        baseline: HealthSnapshot,
+        latest: HealthSnapshot,
+        recorderActive: Bool
+    ) -> RecentHealthSummary {
+        let callbackErrorCount = latest.callbackErrorCount.saturatingSubtract(baseline.callbackErrorCount)
+        if callbackErrorCount > 0 {
+            return RecentHealthSummary(severity: .failed, title: "Failed", detail: "Audio callback error")
+        }
+
+        let systemUnderrunFrames = latest.systemUnderrunFrames.saturatingSubtract(baseline.systemUnderrunFrames)
+        let micUnderrunFrames = latest.micUnderrunFrames.saturatingSubtract(baseline.micUnderrunFrames)
+        let clippedSamples = latest.clippedSamples.saturatingSubtract(baseline.clippedSamples)
+        let sourceQueueDroppedFrames =
+            latest.systemQueueDroppedFrames.saturatingSubtract(baseline.systemQueueDroppedFrames) +
+            latest.micQueueDroppedFrames.saturatingSubtract(baseline.micQueueDroppedFrames)
+        let sharedRingOverrunFrames = latest.sharedRingOverrunFrames.saturatingSubtract(baseline.sharedRingOverrunFrames)
+        let suppressSharedRingOverrun = !recorderActive ||
+            latest.sharedRingFillErrorAbsFrames > sharedRingWaitingForRecorderErrorThresholdFrames
+
+        if micUnderrunFrames > 0 {
+            return RecentHealthSummary(severity: .degraded, title: "Degraded", detail: "Microphone underrun")
+        }
+        if systemUnderrunFrames > 0 {
+            return RecentHealthSummary(severity: .degraded, title: "Degraded", detail: "System audio underrun")
+        }
+        if clippedSamples > 0 {
+            return RecentHealthSummary(severity: .degraded, title: "Degraded", detail: "Clipping")
+        }
+        if sourceQueueDroppedFrames > 0 {
+            return RecentHealthSummary(severity: .degraded, title: "Degraded", detail: "Source queue drops")
+        }
+        if sharedRingOverrunFrames > 0 && !suppressSharedRingOverrun {
+            return RecentHealthSummary(severity: .degraded, title: "Degraded", detail: "Shared ring overrun")
+        }
+
+        return .healthy
+    }
 }
 
 enum SharedRingStabilityStatus: String, Equatable {
@@ -331,7 +440,7 @@ struct HealthDiagnosticSummary: Equatable {
         )
 
         let waitingForRecorder = snapshot.sharedRingOverrunFrames > 0 &&
-            snapshot.sharedRingFillErrorAbsFrames > 48_000
+            snapshot.sharedRingFillErrorAbsFrames > sharedRingWaitingForRecorderErrorThresholdFrames
 
         if snapshot.sharedRingOverrunFrames > 0 && !waitingForRecorder {
             userVisibleFindings.append(

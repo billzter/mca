@@ -195,11 +195,13 @@ The app is an `LSUIElement` menu-bar utility. Its visible surfaces are:
 - microphone active selection and fallback priority
 - launch-at-startup toggle
 - local health/diagnostic status
-- refresh and quit actions
+- quit action
 
 The app starts and maintains the live mixer as an app lifecycle responsibility. The UI does not expose a normal start/stop session switch; quitting the helper is the user-visible stop boundary.
 
 System audio verification requires audible, unmuted system playback during the check. A silent Mac can produce an inconclusive or failed access check even when permission is otherwise available.
+
+The menu-bar status panel is a live snapshot. Its `Health` row reports recent transport health over a short rolling window and can return to `Healthy` after earlier underruns or queue drops stop. When no recorder is actively consuming the virtual input, shared-ring movement should not degrade the menu health row. Setup diagnostics retain cumulative session health counters for troubleshooting and diagnostic reports. The menu-bar item uses its natural AppKit width with a fixed rendered status-icon size. The status panel is manually positioned below the status item, sizes to its current content height, and clamps to the visible screen instead of relying on automatic popover placement.
 
 Current setup behavior:
 

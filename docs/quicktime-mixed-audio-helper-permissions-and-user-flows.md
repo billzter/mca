@@ -519,7 +519,7 @@ Minimum menu items:
 - Check System Audio, when unverified
 - Quit
 
-When `Running`, show a visible active indicator in the menu-bar menu and setup/diagnostics window.
+When `Running`, show a visible active indicator in the menu-bar menu and setup/diagnostics window. The menu-bar health line reflects recent transport health while ignoring shared-ring movement when no recorder is active; setup diagnostics retain cumulative session counters. The menu status panel should stay anchored just below the MCA status item, fit its current menu content height, and remain inside the visible screen even while Screenshot or QuickTime capture overlays are active.
 
 Do not expose start/stop session controls in the main UX. If the helper is running and durable setup is complete, the app quietly publishes the live mixed input; Quit is the user-visible stop.
 

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @testable import MixedCaptureAudio
 import XCTest
@@ -1511,6 +1512,202 @@ final class AppStatusModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLiveHealthRefreshPublishesRecentMenuHealthSeparatelyFromCumulativeDiagnostics() async {
+        let controller = FakeLiveMixerController()
+        var snapshot = HealthSnapshot.cleanRunning
+        snapshot.micUnderrunFrames = 512
+        controller.healthSnapshot = snapshot
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshLiveMixerHealth()
+        snapshot.framesMixed += 48_000
+        controller.healthSnapshot = snapshot
+        model.refreshLiveMixerHealth()
+
+        XCTAssertEqual(model.healthSummary.severity, .degraded)
+        XCTAssertEqual(model.recentHealthSummary.severity, .healthy)
+        XCTAssertEqual(model.recentHealthSummary.title, "Healthy")
+    }
+
+    @MainActor
+    func testLiveHealthRefreshIgnoresSharedRingOverrunWhenNoRecorderIsActive() async {
+        let controller = FakeLiveMixerController()
+        controller.virtualAudioDeviceRunning = false
+        var snapshot = HealthSnapshot.cleanRunning
+        controller.healthSnapshot = snapshot
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshLiveMixerHealth()
+        snapshot.sharedRingFillFrames = 12_000
+        snapshot.sharedRingFillErrorFrames = 9_600
+        snapshot.sharedRingFillErrorAbsFrames = 9_600
+        snapshot.sharedRingOverrunFrames = 91_200
+        controller.healthSnapshot = snapshot
+        model.refreshLiveMixerHealth()
+
+        XCTAssertEqual(model.recentHealthSummary.severity, .healthy)
+        XCTAssertEqual(model.recentHealthSummary.title, "Healthy")
+    }
+
+    @MainActor
+    func testLiveHealthRefreshResetsRecentMenuHealthWhenControllerHasNoSnapshot() async {
+        let controller = FakeLiveMixerController()
+        controller.healthSnapshot = .cleanRunning
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+
+        model.refreshLiveMixerHealth()
+        controller.healthSnapshot = nil
+        model.refreshLiveMixerHealth()
+
+        XCTAssertEqual(model.recentHealthSummary, .noActiveSession)
+    }
+
+    @MainActor
+    func testMenuHealthPresentationUsesStatusToneAndIcon() async {
+        let healthy = MenuStatusPresentation(recentHealthSummary: .healthy)
+        let degraded = MenuStatusPresentation(
+            recentHealthSummary: RecentHealthSummary(
+                severity: .degraded,
+                title: "Degraded",
+                detail: "Microphone underrun"
+            )
+        )
+        let failed = MenuStatusPresentation(
+            recentHealthSummary: RecentHealthSummary(
+                severity: .failed,
+                title: "Failed",
+                detail: "Audio callback error"
+            )
+        )
+        let neutral = MenuStatusPresentation(recentHealthSummary: .noActiveSession)
+
+        XCTAssertEqual(healthy.value, "Healthy")
+        XCTAssertEqual(healthy.tone, .good)
+        XCTAssertEqual(healthy.systemImageName, "checkmark.circle.fill")
+        XCTAssertEqual(degraded.value, "Degraded - Microphone underrun")
+        XCTAssertEqual(degraded.tone, .warning)
+        XCTAssertEqual(failed.value, "Failed - Audio callback error")
+        XCTAssertEqual(failed.tone, .error)
+        XCTAssertEqual(neutral.value, "No active session")
+        XCTAssertEqual(neutral.tone, .neutral)
+    }
+
+    @MainActor
+    func testStatusMenuActionsDoNotIncludeRefresh() async {
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio)
+        )
+
+        XCTAssertFalse(model.statusMenuActions.map(\.title).contains("Refresh"))
+    }
+
+    @MainActor
+    func testStatusItemUsesVariableLengthWithFixedIconSize() {
+        XCTAssertEqual(StatusItemLayout.length, NSStatusItem.variableLength)
+    }
+
+    func testStatusMenuPanelLayoutAnchorsBelowVisibleMenuBarArea() {
+        let visibleFrame = NSRect(x: 0, y: 0, width: 1_000, height: 876)
+        let statusItemFrame = NSRect(x: 468, y: 876, width: 64, height: 24)
+        let panelSize = NSSize(width: StatusMenuPanelLayout.width, height: 312)
+
+        let frame = StatusMenuPanelLayout.frame(
+            anchorFrame: statusItemFrame,
+            visibleFrame: visibleFrame,
+            panelSize: panelSize
+        )
+
+        XCTAssertEqual(frame.maxY, visibleFrame.maxY - StatusMenuPanelLayout.verticalGap)
+        XCTAssertEqual(frame.midX, statusItemFrame.midX, accuracy: 0.5)
+        XCTAssertEqual(frame.height, panelSize.height)
+    }
+
+    func testStatusMenuPanelLayoutClampsNearScreenEdges() {
+        let visibleFrame = NSRect(x: 0, y: 0, width: 1_000, height: 876)
+        let leftStatusItemFrame = NSRect(x: 12, y: 876, width: 64, height: 24)
+        let rightStatusItemFrame = NSRect(x: 940, y: 876, width: 64, height: 24)
+
+        let leftFrame = StatusMenuPanelLayout.frame(
+            anchorFrame: leftStatusItemFrame,
+            visibleFrame: visibleFrame
+        )
+        let rightFrame = StatusMenuPanelLayout.frame(
+            anchorFrame: rightStatusItemFrame,
+            visibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(leftFrame.minX, visibleFrame.minX + StatusMenuPanelLayout.screenPadding)
+        XCTAssertEqual(
+            rightFrame.maxX,
+            visibleFrame.maxX - StatusMenuPanelLayout.screenPadding
+        )
+    }
+
+    func testStatusMenuPanelLayoutUsesMeasuredHeightAndClampsToVisibleScreen() {
+        let visibleFrame = NSRect(x: 0, y: 0, width: 1_000, height: 500)
+
+        let compactSize = StatusMenuPanelLayout.panelSize(
+            fittingHeight: 318.2,
+            visibleFrame: visibleFrame
+        )
+        let oversizedSize = StatusMenuPanelLayout.panelSize(
+            fittingHeight: 800,
+            visibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(compactSize.width, StatusMenuPanelLayout.width)
+        XCTAssertEqual(compactSize.height, 319)
+        XCTAssertEqual(oversizedSize.height, visibleFrame.height - (StatusMenuPanelLayout.verticalGap * 2))
+    }
+
+    func testStatusMenuPanelLayoutDoesNotCloseForStatusItemOrPanelClicks() {
+        let statusItemFrame = NSRect(x: 459, y: 876, width: 82, height: 24)
+        let panelFrame = NSRect(x: 320, y: 520, width: 360, height: 348)
+
+        XCTAssertFalse(
+            StatusMenuPanelLayout.shouldCloseForGlobalClick(
+                location: NSPoint(x: 500, y: 888),
+                statusItemFrame: statusItemFrame,
+                panelFrame: panelFrame
+            )
+        )
+        XCTAssertFalse(
+            StatusMenuPanelLayout.shouldCloseForGlobalClick(
+                location: NSPoint(x: 500, y: 700),
+                statusItemFrame: statusItemFrame,
+                panelFrame: panelFrame
+            )
+        )
+        XCTAssertTrue(
+            StatusMenuPanelLayout.shouldCloseForGlobalClick(
+                location: NSPoint(x: 100, y: 700),
+                statusItemFrame: statusItemFrame,
+                panelFrame: panelFrame
+            )
+        )
+    }
+
+    @MainActor
     func testLiveHealthRefreshShowsRecorderActiveWhenVirtualDeviceIsRunning() async {
         let controller = FakeLiveMixerController()
         controller.virtualAudioDeviceRunning = true
@@ -1578,6 +1775,7 @@ final class AppStatusModelTests: XCTestCase {
 
         assertEqual(model.lastHealthSnapshot, .empty)
         assertEqual(model.healthSummary.severity, .good)
+        assertEqual(model.recentHealthSummary, .noActiveSession)
     }
 
     @MainActor
@@ -1863,13 +2061,13 @@ private final class InMemorySystemAudioAccessStore: SystemAudioAccessStoring {
 
 private func assertEqual<T: Equatable>(_ actual: T, _ expected: T, file: StaticString = #file, line: UInt = #line) {
     if actual != expected {
-        fatalError("Expected \(expected), got \(actual)", file: file, line: line)
+        XCTFail("Expected \(expected), got \(actual)", file: file, line: line)
     }
 }
 
 private func assertStringContains(_ value: String, _ expected: String, file: StaticString = #file, line: UInt = #line) {
     if !value.contains(expected) {
-        fatalError("Expected string to contain \(expected)", file: file, line: line)
+        XCTFail("Expected string to contain \(expected)", file: file, line: line)
     }
 }
 
