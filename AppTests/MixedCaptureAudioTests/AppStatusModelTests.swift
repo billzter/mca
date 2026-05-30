@@ -1783,85 +1783,161 @@ final class AppStatusModelTests: XCTestCase {
         XCTAssertEqual(StatusItemLayout.length, NSStatusItem.variableLength)
     }
 
-    func testStatusMenuPanelLayoutAnchorsBelowVisibleMenuBarArea() {
-        let visibleFrame = NSRect(x: 0, y: 0, width: 1_000, height: 876)
-        let statusItemFrame = NSRect(x: 468, y: 876, width: 64, height: 24)
-        let panelSize = NSSize(width: StatusMenuPanelLayout.width, height: 312)
-
-        let frame = StatusMenuPanelLayout.frame(
-            anchorFrame: statusItemFrame,
-            visibleFrame: visibleFrame,
-            panelSize: panelSize
+    @MainActor
+    func testNativeStatusMenuBuildsStatusRowsAndActionsWithoutRefresh() async throws {
+        let liveMixerController = FakeLiveMixerController()
+        liveMixerController.virtualAudioDeviceRunning = true
+        liveMixerController.healthSnapshot = HealthSnapshot(
+            framesMixed: 96_000,
+            systemUnderrunFrames: 0,
+            micUnderrunFrames: 0,
+            clippedSamples: 0,
+            systemQueueFrames: 0,
+            micQueueFrames: 0,
+            sourceFrameDelta: 0,
+            sourceFrameDeltaAbs: 0,
+            systemDriftDropFrames: 0,
+            micDriftDropFrames: 0,
+            callbackErrorCount: 0
         )
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: liveMixerController
+        )
+        model.refreshPrerequisites()
+        model.selectedMicrophoneName = "MacBook Pro Microphone"
+        model.systemAudioAccess = .receivingAudio
+        model.liveMixerState = .running
+        model.refreshLiveMixerHealth()
 
-        XCTAssertEqual(frame.maxY, visibleFrame.maxY - StatusMenuPanelLayout.verticalGap)
-        XCTAssertEqual(frame.midX, statusItemFrame.midX, accuracy: 0.5)
-        XCTAssertEqual(frame.height, panelSize.height)
+        let controller = StatusMenuController(model: model, openSetup: {}, terminate: {})
+        controller.menuWillOpen(controller.menu)
+
+        let rowViews = controller.menu.items.compactMap { $0.view as? StatusMenuStatusRowView }
+
+        XCTAssertEqual(rowViews.map(\.titleText), ["Device", "Mic", "System", "Mixer", "Health"])
+        XCTAssertEqual(rowViews.map(\.symbolName), Array(repeating: "checkmark.circle.fill", count: 5))
+        XCTAssertNotNil(controller.menu.item(withTitle: "Launch at startup"))
+        XCTAssertNotNil(controller.menu.item(withTitle: "Check System Audio"))
+        XCTAssertNotNil(controller.menu.item(withTitle: "Open Setup"))
+        XCTAssertNotNil(controller.menu.item(withTitle: "Quit"))
+        XCTAssertNil(controller.menu.item(withTitle: "Refresh"))
     }
 
-    func testStatusMenuPanelLayoutClampsNearScreenEdges() {
-        let visibleFrame = NSRect(x: 0, y: 0, width: 1_000, height: 876)
-        let leftStatusItemFrame = NSRect(x: 12, y: 876, width: 64, height: 24)
-        let rightStatusItemFrame = NSRect(x: 940, y: 876, width: 64, height: 24)
+    @MainActor
+    func testStatusItemControllerInstallsNativeMenuInsteadOfButtonAction() {
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio)
+        )
+        let controller = StatusItemController(model: model, openSetup: {})
+        controller.install()
+        defer { controller.uninstall() }
 
-        let leftFrame = StatusMenuPanelLayout.frame(
-            anchorFrame: leftStatusItemFrame,
-            visibleFrame: visibleFrame
-        )
-        let rightFrame = StatusMenuPanelLayout.frame(
-            anchorFrame: rightStatusItemFrame,
-            visibleFrame: visibleFrame
-        )
-
-        XCTAssertEqual(leftFrame.minX, visibleFrame.minX + StatusMenuPanelLayout.screenPadding)
-        XCTAssertEqual(
-            rightFrame.maxX,
-            visibleFrame.maxX - StatusMenuPanelLayout.screenPadding
-        )
+        let statusItem = controller.statusItemForTesting
+        XCTAssertNotNil(statusItem.menu)
+        XCTAssertNil(statusItem.button?.action)
+        XCTAssertEqual(statusItem.length, NSStatusItem.variableLength)
     }
 
-    func testStatusMenuPanelLayoutUsesMeasuredHeightAndClampsToVisibleScreen() {
-        let visibleFrame = NSRect(x: 0, y: 0, width: 1_000, height: 500)
-
-        let compactSize = StatusMenuPanelLayout.panelSize(
-            fittingHeight: 318.2,
-            visibleFrame: visibleFrame
+    @MainActor
+    func testLaunchAtStartupToggleIsViewBackedToAvoidCommandMenuDismissal() async throws {
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio)
         )
-        let oversizedSize = StatusMenuPanelLayout.panelSize(
-            fittingHeight: 800,
-            visibleFrame: visibleFrame
-        )
+        let controller = StatusMenuController(model: model, openSetup: {}, terminate: {})
+        controller.menuWillOpen(controller.menu)
 
-        XCTAssertEqual(compactSize.width, StatusMenuPanelLayout.width)
-        XCTAssertEqual(compactSize.height, 319)
-        XCTAssertEqual(oversizedSize.height, visibleFrame.height - (StatusMenuPanelLayout.verticalGap * 2))
+        let launchItem = try XCTUnwrap(controller.menu.item(withTitle: "Launch at startup"))
+
+        XCTAssertNil(launchItem.action)
+        XCTAssertNil(launchItem.target)
+        XCTAssertNotNil(launchItem.view)
     }
 
-    func testStatusMenuPanelLayoutDoesNotCloseForStatusItemOrPanelClicks() {
-        let statusItemFrame = NSRect(x: 459, y: 876, width: 82, height: 24)
-        let panelFrame = NSRect(x: 320, y: 520, width: 360, height: 348)
+    @MainActor
+    func testLaunchAtStartupViewToggleUpdatesStateInPlace() async throws {
+        let launchController = FakeLaunchAtStartupController(status: .disabled)
+        launchController.nextSetResult = .success(.enabled)
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            launchAtStartupController: launchController
+        )
+        model.refreshLaunchAtStartupStatus()
 
-        XCTAssertFalse(
-            StatusMenuPanelLayout.shouldCloseForGlobalClick(
-                location: NSPoint(x: 500, y: 888),
-                statusItemFrame: statusItemFrame,
-                panelFrame: panelFrame
-            )
+        let controller = StatusMenuController(model: model, openSetup: {}, terminate: {})
+        controller.menuWillOpen(controller.menu)
+        let launchView = try XCTUnwrap(
+            controller.menu.item(withTitle: "Launch at startup")?.view as? StatusMenuLaunchAtStartupView
         )
-        XCTAssertFalse(
-            StatusMenuPanelLayout.shouldCloseForGlobalClick(
-                location: NSPoint(x: 500, y: 700),
-                statusItemFrame: statusItemFrame,
-                panelFrame: panelFrame
-            )
+        let launchItem = try XCTUnwrap(controller.menu.item(withTitle: "Launch at startup"))
+
+        XCTAssertFalse(launchView.isChecked)
+        XCTAssertEqual(launchView.statusText, "Off")
+        XCTAssertEqual(launchItem.toolTip, "Off")
+
+        launchView.performToggleForTesting()
+
+        XCTAssertEqual(launchController.lastSetEnabled, true)
+        XCTAssertTrue(launchView.isChecked)
+        XCTAssertEqual(launchView.statusText, "On")
+        XCTAssertEqual(launchItem.toolTip, "On")
+    }
+
+    @MainActor
+    func testNativeStatusMenuUpdatesVisibleRowsWhenModelStateChanges() async throws {
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio)
         )
-        XCTAssertTrue(
-            StatusMenuPanelLayout.shouldCloseForGlobalClick(
-                location: NSPoint(x: 100, y: 700),
-                statusItemFrame: statusItemFrame,
-                panelFrame: panelFrame
-            )
+        model.refreshPrerequisites()
+        let controller = StatusMenuController(model: model, openSetup: {}, terminate: {})
+        controller.menuWillOpen(controller.menu)
+        let systemRow = try XCTUnwrap(
+            controller.menu.items
+                .compactMap { $0.view as? StatusMenuStatusRowView }
+                .first { $0.titleText == "System" }
         )
+
+        model.systemAudioAccess = .receivingAudio
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(systemRow.valueText, "Receiving audio")
+        XCTAssertEqual(systemRow.symbolName, "checkmark.circle.fill")
+    }
+
+    @MainActor
+    func testNativeStatusMenuUpdatesHeaderWhenPrimaryStatusChanges() async throws {
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio)
+        )
+        model.sessionState = .ready
+        let controller = StatusMenuController(model: model, openSetup: {}, terminate: {})
+        controller.menuWillOpen(controller.menu)
+        let headerView = try XCTUnwrap(
+            controller.menu.items
+                .compactMap { $0.view as? StatusMenuHeaderView }
+                .first
+        )
+
+        XCTAssertEqual(headerView.accessibilityLabel(), "MixedCaptureAudio, Ready")
+
+        model.sessionState = .running
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(headerView.accessibilityLabel(), "MixedCaptureAudio, Running")
     }
 
     @MainActor
