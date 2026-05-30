@@ -140,13 +140,16 @@ typedef struct mixed_audio_shm_header {
 Shared-memory rules:
 
 - Shared memory contains the final mixed stream written by the app-owned Rust mixer, not raw mic/system sources.
-- The app creates, initializes, owns, and unlinks the shared-memory object.
+- The app creates, initializes, and owns the shared-memory object. Normal stop and ordinary app termination preserve the object for restart adoption; only explicit discard/reset paths unlink it.
+- Production sessions must hold the app-side producer ownership lock before creating or adopting `/mca.mix.v1`. If a fresh legacy heartbeat is present after ownership is acquired, the app waits for the bounded heartbeat-stale window before adopting; if the heartbeat remains live, a second release producer fails instead of double-writing and a debug producer falls back to a private `/mca.mix.debug.<pid>` mapping.
 - The HAL plug-in opens the shared-memory object if present; if open/mapping/validation fails, it returns silence.
 - The app writes interleaved stereo Float32 frames.
 - The HAL plug-in reads frames by advancing its read index; if available frames are insufficient, it fills the remainder with silence.
 - Header fields use stable fixed-width C types and atomics; no Swift, Objective-C, or Rust-specific layout crosses this boundary.
 - A stale heartbeat or generation mismatch forces the HAL plug-in to resync and output silence until valid frames are available.
 - Correctness rule: the producer writes complete frames before publishing the write index; the consumer never reads beyond the published write index; any invalid or missing state becomes silence.
+- App restart recovery uses shared-memory adoption: a valid existing POSIX object is reused, the Rust session seeds from the current `write_frame_index`, and the next producer write publishes a higher `generation`.
+- Normal producer stop and ordinary app termination clear the audio frame region and heartbeat without unmapping so a persistent shared-memory object remains a live transport artifact, not retained audio content. Ordinary app termination performs this stop/clear path synchronously before returning from termination. Explicit discard unmaps and unlinks it only when the app owns the production transport.
 
 Rust FFI rules:
 
@@ -172,7 +175,7 @@ Sample-rate and drift rules:
 - The target shared-ring fill setpoint is a fixed app/HAL ABI contract constant. The HAL must use that constant for latency reporting even when the app is stopped and shared memory does not exist.
 - The residual difference between actual shared-ring fill and `MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES` is residual A/V sync error and must be measured as a release criterion.
 - The shared-memory header may mirror `target_shared_fill_frames` for diagnostics and compatibility validation, but it is not the HAL's source of truth for latency reporting.
-- While a capture session is active, prevent App Nap/timer coalescing from delaying the mixer path and measure worst-case wakeup jitter against the target-fill constant.
+- While a capture session is active, hold a latency-critical `ProcessInfo` activity assertion, promote the mixer owner thread to high QoS plus pthread time-constraint policy sized to the mixer tick interval, and measure worst-case wakeup jitter against the target-fill constant. While idle, keep the owner thread at utility QoS/standard policy.
 
 ## Build Process
 

@@ -146,6 +146,10 @@ private final class FakeMeterLiveMixerController: LiveMixerControlling {
         completion()
     }
 
+    @MainActor func stopSynchronouslyForTermination() {}
+
+    @MainActor func discardSharedMemory() {}
+
     @MainActor func setAudioLevels(_ settings: AudioLevelSettings) {
         _ = settings
     }

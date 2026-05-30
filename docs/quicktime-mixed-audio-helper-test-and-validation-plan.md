@@ -54,11 +54,17 @@ Coverage:
 - Limiter keeps output in `[-1.0, 1.0]`.
 - Clipping counter increments when pre-limiter samples exceed `abs(1.0)`.
 - Source buffer overrun drops oldest unread frames without blocking.
+- Source queue overflow reports accepted frame counts and increments explicit overflow counters.
 - Simulated source drift does not cause unbounded buffer growth.
 - Shared-memory header initializes with expected magic/version/format.
+- C and Rust shared-memory header size, alignment, and field offsets match exactly.
+- Public Rust engine config/health structs have C-side size and alignment assertions in the generated header.
 - Shared-memory writer writes frames before publishing `write_frame_index`.
 - Shared-memory writer publishes `write_frame_index` with release ordering and reader acquires before reading.
 - Shared-memory writer increments heartbeat and generation.
+- POSIX shared-memory writer adopts a valid existing object, preserving write index and generation state for app restart recovery.
+- Normal producer stop clears shared-memory audio frames and heartbeat without unlinking or resetting restart adoption state.
+- Ordinary app termination stops the mixer synchronously and clears shared-memory audio/heartbeat without unlinking the app-owned POSIX object, preserving normal restart adoption behavior.
 - Health snapshots report expected counters.
 - Invalid FFI arguments do not panic.
 
@@ -66,6 +72,13 @@ Acceptance:
 
 - All Rust tests pass.
 - No callback-facing FFI path allocates, blocks, logs, waits, or panics.
+
+Test isolation:
+
+- App-hosted Xcode test teardown and ordinary release app termination must not discard `/mca.mix.v1`; explicit discard/reset paths remain responsible for unlinking the named production object.
+- App-hosted Xcode test sessions automatically resolve native producer shared memory to `/mca.mix.test.<pid>` in debug/test builds when no explicit test override is set. These auto-XCTest mappings are unlinked immediately after mapping so test processes do not leak per-pid POSIX shared-memory objects.
+- Native producer tests that need a specific POSIX transport may set `MCA_TEST_SHARED_MEMORY_NAME` to a short name with the `/mca.mix.test.` or `/mca.mix.debug.` prefix. Debug/test builds honor that override for the producer session and session-specific unlink path; release builds keep the fixed `/mca.mix.v1` app/HAL contract.
+- A debug app run that finds `/mca.mix.v1` already owned by another producer must not adopt or unlink that object; it uses an isolated `/mca.mix.debug.<pid>` mapping instead. If the app acquires ownership but finds a fresh legacy heartbeat, it waits for the bounded heartbeat-stale window before adopting; if the heartbeat remains live, debug uses the isolated mapping and a second release producer fails session creation rather than double-writing the production ring.
 
 ### Layer 2: C Shared-Memory Reader Tests
 
@@ -384,6 +397,7 @@ Acceptance:
 
 - App never reports `Ready` with an incompatible driver.
 - App never starts mixing against an unsupported shared-memory ABI or mismatched target shared-fill constant.
+- App-held live mixer activity assertions begin after successful native mixer start and end on stop, failed restart, synchronous termination stop, or final shared-memory discard.
 - Driver update path uses signed/notarized package installation.
 - User receives clear reload/restart guidance when needed.
 
@@ -464,6 +478,7 @@ Initial thresholds:
 - Shared-ring fill avoids unbounded growth/shrinkage around the fixed ABI target during 30-60 minute producer-to-HAL drift tests.
 - Shared-ring fill error min/max/mean/p95/p99 are recorded and stay within the chosen residual sync-error budget.
 - Mixer wakeup jitter remains below the fixed target-fill budget with measured margin, or the target-fill ABI constant is raised before release.
+- Under load, the mixer owner thread remains high-QoS/time-constrained and App Nap/timer coalescing is suppressed while the session is active; when idle, the owner thread demotes to utility QoS/standard policy.
 - Final-stage rate trim remains within configured bounds.
 - HAL-reported latency includes the fixed target shared-ring fill even when the app is stopped.
 - App blocks `Ready` when app/Rust/HAL target-fill constants or ABI versions disagree.

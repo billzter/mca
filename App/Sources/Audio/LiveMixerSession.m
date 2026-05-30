@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <math.h>
 #include <mach/mach_time.h>
+#include <mach/thread_policy.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdatomic.h>
@@ -102,7 +103,9 @@ enum {
     kMCALiveMixerHealthSharedRingOverrunFrames = 14,
     kMCALiveMixerHealthSystemQueueDroppedFrames = 15,
     kMCALiveMixerHealthMicQueueDroppedFrames = 16,
-    kMCALiveMixerHealthCounterCount = 17
+    kMCALiveMixerHealthSystemQueueOverflowFrames = 17,
+    kMCALiveMixerHealthMicQueueOverflowFrames = 18,
+    kMCALiveMixerHealthCounterCount = 19
 };
 
 static uint64_t MCASignedInt32Bits(int32_t value)
@@ -139,6 +142,52 @@ static bool MCALevelsAreValid(float systemGain, float micGain)
         micGain >= 0.0f &&
         systemGain <= kMCAMaxSourceGain &&
         micGain <= kMCAMaxSourceGain;
+}
+
+static uint32_t MCAClampMachIntervalToPolicyValue(uint64_t interval)
+{
+    if (interval == 0) {
+        return 1;
+    }
+    return interval > UINT32_MAX ? UINT32_MAX : (uint32_t)interval;
+}
+
+static void MCADemoteMixerOwnerThreadFromRealtime(void)
+{
+    thread_standard_policy_data_t policy = { .no_data = 0 };
+    (void)thread_policy_set(pthread_mach_thread_np(pthread_self()),
+                            THREAD_STANDARD_POLICY,
+                            (thread_policy_t)&policy,
+                            THREAD_STANDARD_POLICY_COUNT);
+    (void)pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+}
+
+static void MCAPromoteMixerOwnerThreadToRealtime(uint64_t tickInterval)
+{
+    if (tickInterval == 0) {
+        return;
+    }
+    (void)pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+
+    uint64_t computation = tickInterval / 2;
+    uint64_t constraint = (tickInterval * 9) / 10;
+    if (computation == 0) {
+        computation = 1;
+    }
+    if (constraint <= computation) {
+        constraint = computation + 1;
+    }
+
+    thread_time_constraint_policy_data_t policy = {
+        .period = MCAClampMachIntervalToPolicyValue(tickInterval),
+        .computation = MCAClampMachIntervalToPolicyValue(computation),
+        .constraint = MCAClampMachIntervalToPolicyValue(constraint),
+        .preemptible = 1
+    };
+    (void)thread_policy_set(pthread_mach_thread_np(pthread_self()),
+                            THREAD_TIME_CONSTRAINT_POLICY,
+                            (thread_policy_t)&policy,
+                            THREAD_TIME_CONSTRAINT_POLICY_COUNT);
 }
 
 static void MCAStorePeakMax(atomic_uint_fast32_t *peakBits, float peak)
@@ -615,10 +664,20 @@ static bool MCAEnsureMixerOwnerThread(MCALiveMixerContext *context)
         return true;
     }
 
+    pthread_attr_t attr;
+    pthread_attr_t *attrPtr = NULL;
+    if (pthread_attr_init(&attr) == 0) {
+        (void)pthread_attr_set_qos_class_np(&attr, QOS_CLASS_UTILITY, 0);
+        attrPtr = &attr;
+    }
+
     int status = pthread_create(&context->mixerThread,
-                                NULL,
+                                attrPtr,
                                 MCAMixerOwnerThreadMain,
                                 context);
+    if (attrPtr != NULL) {
+        pthread_attr_destroy(&attr);
+    }
     if (status != 0) {
         pthread_mutex_unlock(&context->mutex);
         return false;
@@ -823,6 +882,10 @@ static void MCAMixerOwnerProcessTickLocked(MCALiveMixerContext *context)
         }
     }
 
+    if (!atomic_load_explicit(&context->mixerActive, memory_order_acquire)) {
+        return;
+    }
+
     if (context->session == NULL) {
         return;
     }
@@ -855,6 +918,7 @@ static void *MCAMixerOwnerThreadMain(void *userData)
 {
     MCALiveMixerContext *context = (MCALiveMixerContext *)userData;
     uint64_t tickInterval = MCAMachTicksForAudioFrames(kMCAMixerTickFrames);
+    bool realtimeSchedulingEnabled = false;
     uint64_t nextTick = mach_absolute_time();
     while (true) {
         bool active = atomic_load_explicit(&context->mixerActive, memory_order_acquire);
@@ -863,9 +927,17 @@ static void *MCAMixerOwnerThreadMain(void *userData)
         bool hasReset = atomic_load_explicit(&context->resetSourcesRequested,
                                              memory_order_acquire);
         if (!active && !hasBridge && !hasReset) {
+            if (realtimeSchedulingEnabled) {
+                MCADemoteMixerOwnerThreadFromRealtime();
+                realtimeSchedulingEnabled = false;
+            }
             usleep(kMCAMixerIdleMicros);
             nextTick = mach_absolute_time();
             continue;
+        }
+        if (!realtimeSchedulingEnabled) {
+            MCAPromoteMixerOwnerThreadToRealtime(tickInterval);
+            realtimeSchedulingEnabled = true;
         }
 
         uint64_t tickStart = mach_absolute_time();
@@ -1243,6 +1315,37 @@ void MCA_LiveMixerStop(void)
     // Stop means "no active source graph" during setup/mode changes. Keep the Rust session and
     // shared-memory object alive so existing HAL clients do not stay mapped to an unlinked object.
     MCACleanup(&gMixer);
+
+    pthread_mutex_lock(&gMixer.mutex);
+    atomic_store_explicit(&gMixer.resetSourcesRequested, false, memory_order_release);
+    MCAResetSourceQueuesOnMixerOwner(&gMixer);
+    if (gMixer.session != NULL) {
+        (void)mixed_audio_session_reset_sources(gMixer.session);
+        (void)mixed_audio_session_clear_shared_memory(gMixer.session);
+        memset(&gMixer.cachedHealth, 0, sizeof(gMixer.cachedHealth));
+    }
+    pthread_mutex_unlock(&gMixer.mutex);
+}
+
+int32_t MCA_LiveMixerDiscardSharedMemory(void)
+{
+    pthread_once(&gMixerOnce, MCAInitMixer);
+    MCACleanup(&gMixer);
+
+    MixedAudioSessionHandle *session = NULL;
+    pthread_mutex_lock(&gMixer.mutex);
+    session = gMixer.session;
+    gMixer.session = NULL;
+    memset(&gMixer.cachedHealth, 0, sizeof(gMixer.cachedHealth));
+    pthread_mutex_unlock(&gMixer.mutex);
+
+    if (session == NULL) {
+        return mixed_audio_session_unlink_default_shared_memory();
+    }
+
+    int32_t unlinkResult = mixed_audio_session_unlink_session_shared_memory(session);
+    mixed_audio_session_destroy(session);
+    return unlinkResult;
 }
 
 int32_t MCA_LiveMixerSetLevels(float systemGain, float micGain)
@@ -1329,6 +1432,10 @@ int32_t MCA_LiveMixerCopyHealthCounters(uint64_t *outCounters, uint32_t counterC
         health.shared_ring_overrun_frames;
     outCounters[kMCALiveMixerHealthSystemQueueDroppedFrames] = systemQueueDroppedFrames;
     outCounters[kMCALiveMixerHealthMicQueueDroppedFrames] = micQueueDroppedFrames;
+    outCounters[kMCALiveMixerHealthSystemQueueOverflowFrames] =
+        health.system_queue_overflow_frames;
+    outCounters[kMCALiveMixerHealthMicQueueOverflowFrames] =
+        health.mic_queue_overflow_frames;
     return 0;
 }
 

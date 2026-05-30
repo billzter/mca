@@ -254,6 +254,8 @@ mixed_audio_shm_reader_status_t mixed_audio_shm_reader_read_at_time(mixed_audio_
         uint32_t slot = (uint32_t)(source_frame_index % capacity_frames);
         const float *source = frames + ((size_t)slot * MIXED_AUDIO_OUTPUT_CHANNEL_COUNT);
         float *destination = output_frames + ((size_t)i * MIXED_AUDIO_OUTPUT_CHANNEL_COUNT);
+        // On overrun the producer may overwrite this slot while it is being read. The reader
+        // reports the overrun and accepts one benign torn frame instead of locking the IO path.
         destination[0] = source[0];
         destination[1] = source[1];
     }

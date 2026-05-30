@@ -474,6 +474,8 @@ Behavior:
 CI should run:
 
 - `cargo test`
+- `cargo fmt --check`
+- `cargo clippy -- -D warnings`
 - `cbindgen` header generation check
 - Shared ABI constant consistency check
 - `xcodebuild test` for `MixedCaptureAudioTests`

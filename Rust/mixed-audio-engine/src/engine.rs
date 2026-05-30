@@ -2,11 +2,14 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::slice;
 
+pub use crate::generated_shared_memory_abi::{
+    MIXED_AUDIO_OUTPUT_CHANNEL_COUNT as MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS,
+    MIXED_AUDIO_OUTPUT_SAMPLE_RATE as MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE,
+};
+
 // Release builds intentionally use `panic = "abort"`. These FFI wrappers still use
 // `catch_unwind` so debug/test unwind builds fail closed, but release safety relies on
 // validating inputs and keeping the implementation's normal error paths panic-free.
-pub const MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE: u32 = 48_000;
-pub const MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS: u32 = 2;
 const MIXED_AUDIO_ENGINE_MAX_SOURCE_GAIN: f32 = 16.0;
 const MIN_DETECTOR_LEVEL: f32 = 0.000_000_001;
 const SOFT_LIMIT_THRESHOLD: f32 = 0.95;
@@ -56,6 +59,8 @@ pub struct MixedAudioEngineHealth {
     pub system_underrun_frames: u64,
     pub mic_underrun_frames: u64,
     pub clipped_samples: u64,
+    pub system_queue_overflow_frames: u64,
+    pub mic_queue_overflow_frames: u64,
     pub system_queue_frames: u32,
     pub mic_queue_frames: u32,
     pub source_frame_delta: i32,
@@ -205,22 +210,40 @@ impl Engine {
         }
 
         let frames = samples.len() / MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS as usize;
+        let mut written = 0u32;
         for frame in 0..frames {
-            self.system.push(StereoFrame {
-                left: samples[frame * 2],
-                right: samples[frame * 2 + 1],
-            })?;
+            if self
+                .system
+                .push(StereoFrame {
+                    left: samples[frame * 2],
+                    right: samples[frame * 2 + 1],
+                })
+                .is_err()
+            {
+                self.health.system_queue_overflow_frames +=
+                    (frames as u64).saturating_sub(written as u64);
+                self.refresh_queue_health();
+                return Ok(written);
+            }
+            written += 1;
         }
         self.refresh_queue_health();
-        Ok(frames as u32)
+        Ok(written)
     }
 
     pub fn push_mic_mono(&mut self, samples: &[f32]) -> EngineResult<u32> {
+        let mut written = 0u32;
         for sample in samples {
-            self.mic.push(*sample)?;
+            if self.mic.push(*sample).is_err() {
+                self.health.mic_queue_overflow_frames +=
+                    (samples.len() as u64).saturating_sub(written as u64);
+                self.refresh_queue_health();
+                return Ok(written);
+            }
+            written += 1;
         }
         self.refresh_queue_health();
-        Ok(samples.len() as u32)
+        Ok(written)
     }
 
     pub fn mix_available(

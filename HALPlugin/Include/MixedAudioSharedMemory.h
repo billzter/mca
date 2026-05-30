@@ -36,6 +36,17 @@ typedef struct mixed_audio_shm_header {
     _Atomic uint64_t clipped_frame_count;
 } mixed_audio_shm_header_t;
 
+_Static_assert(sizeof(mixed_audio_shm_header_t) == 88,
+               "shared-memory header size changed; update Rust mirror and bump ABI version");
+_Static_assert(_Alignof(mixed_audio_shm_header_t) == 8,
+               "shared-memory header alignment changed; update Rust mirror and bump ABI version");
+_Static_assert(offsetof(mixed_audio_shm_header_t, write_frame_index) == 24,
+               "write_frame_index offset changed; update Rust mirror and bump ABI version");
+_Static_assert(offsetof(mixed_audio_shm_header_t, generation) == 40,
+               "generation offset changed; update Rust mirror and bump ABI version");
+_Static_assert(offsetof(mixed_audio_shm_header_t, producer_heartbeat_nanos) == 48,
+               "producer_heartbeat_nanos offset changed; update Rust mirror and bump ABI version");
+
 static inline size_t mixed_audio_shm_frame_byte_count(uint32_t frame_count)
 {
     return (size_t)frame_count * MIXED_AUDIO_OUTPUT_CHANNEL_COUNT * sizeof(float);
