@@ -342,74 +342,26 @@ enum StatusItemLayout {
     static let length: CGFloat = NSStatusItem.variableLength
 }
 
-enum StatusMenuPanelLayout {
-    static let width: CGFloat = 360
-    static let fallbackHeight: CGFloat = 420
-    static let screenPadding: CGFloat = 8
-    static let verticalGap: CGFloat = 8
-
-    static var fallbackSize: NSSize {
-        NSSize(width: width, height: fallbackHeight)
-    }
-
-    static func panelSize(fittingHeight: CGFloat, visibleFrame: NSRect) -> NSSize {
-        let availableHeight = max(visibleFrame.height - (verticalGap * 2), 1)
-        return NSSize(
-            width: width,
-            height: min(max(fittingHeight.rounded(.up), 1), availableHeight)
-        )
-    }
-
-    static func frame(anchorFrame: NSRect, visibleFrame: NSRect, panelSize: NSSize = fallbackSize) -> NSRect {
-        let minimumX = visibleFrame.minX + screenPadding
-        let maximumX = visibleFrame.maxX - screenPadding - panelSize.width
-        let centeredX = anchorFrame.midX - (panelSize.width / 2)
-        let originX: CGFloat
-        if maximumX >= minimumX {
-            originX = min(max(centeredX, minimumX), maximumX)
-        } else {
-            originX = visibleFrame.midX - (panelSize.width / 2)
-        }
-
-        let preferredTop = min(anchorFrame.minY - verticalGap, visibleFrame.maxY - verticalGap)
-        let originY = max(preferredTop - panelSize.height, visibleFrame.minY + verticalGap)
-
-        return NSRect(
-            x: originX.rounded(),
-            y: originY.rounded(),
-            width: panelSize.width,
-            height: panelSize.height
-        )
-    }
-
-    static func shouldCloseForGlobalClick(location: NSPoint, statusItemFrame: NSRect, panelFrame: NSRect) -> Bool {
-        !statusItemFrame.contains(location) && !panelFrame.contains(location)
-    }
-}
-
-private final class StatusMenuPanel: NSPanel {
-    override var canBecomeKey: Bool {
-        true
-    }
-}
-
 @MainActor
-private final class StatusItemController: NSObject {
+final class StatusItemController: NSObject {
     private let model: AppStatusModel
-    private let openSetup: () -> Void
+    private let openSetup: @MainActor () -> Void
     private let statusItem = NSStatusBar.system.statusItem(withLength: StatusItemLayout.length)
-    private lazy var panel = makePanel()
+    private lazy var statusMenuController = StatusMenuController(
+        model: model,
+        openSetup: openSetup
+    )
     private var cancellable: AnyCancellable?
-    private var applicationResignObserver: NSObjectProtocol?
-    private var localEventMonitor: Any?
-    private var globalEventMonitor: Any?
-    private var statusItemScreenFrame: NSRect = .zero
     private var isInstalled = false
 
-    init(model: AppStatusModel, openSetup: @escaping () -> Void) {
+    init(model: AppStatusModel, openSetup: @escaping @MainActor () -> Void) {
         self.model = model
         self.openSetup = openSetup
         super.init()
+    }
+
+    var statusItemForTesting: NSStatusItem {
+        statusItem
     }
 
     func install() {
@@ -417,54 +369,23 @@ private final class StatusItemController: NSObject {
             return
         }
         isInstalled = true
-        configurePanel()
         configureButton()
+        statusItem.menu = statusMenuController.menu
         cancellable = model.objectWillChange.sink { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.configureButton()
             }
         }
-        applicationResignObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.closePanel()
-            }
+    }
+
+    func uninstall() {
+        guard isInstalled else {
+            return
         }
-    }
-
-    private func makePanel() -> StatusMenuPanel {
-        let panel = StatusMenuPanel(
-            contentRect: NSRect(origin: .zero, size: StatusMenuPanelLayout.fallbackSize),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.backgroundColor = .clear
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-        panel.hasShadow = true
-        panel.hidesOnDeactivate = false
-        panel.isFloatingPanel = true
-        panel.isOpaque = false
-        panel.isReleasedWhenClosed = false
-        panel.level = .popUpMenu
-        return panel
-    }
-
-    private func configurePanel() {
-        panel.contentViewController = NSHostingController(
-            rootView: StatusMenuPanelChrome {
-                StatusMenuView(
-                    model: model,
-                    openSetup: { [weak self] in
-                        self?.closePanel()
-                        self?.openSetup()
-                    }
-                )
-            }
-        )
+        cancellable = nil
+        statusItem.menu = nil
+        NSStatusBar.system.removeStatusItem(statusItem)
+        isInstalled = false
     }
 
     private func configureButton() {
@@ -479,125 +400,9 @@ private final class StatusItemController: NSObject {
         )
         button.image?.size = NSSize(width: 18, height: 18)
         button.imagePosition = .imageLeading
-        button.target = self
-        button.action = #selector(togglePanel(_:))
+        button.target = nil
+        button.action = nil
         button.toolTip = "MixedCaptureAudio"
-    }
-
-    @objc private func togglePanel(_ sender: NSStatusBarButton) {
-        if panel.isVisible {
-            closePanel()
-        } else {
-            showPanel(relativeTo: sender)
-        }
-    }
-
-    private func showPanel(relativeTo button: NSStatusBarButton) {
-        guard let buttonWindow = button.window else {
-            return
-        }
-
-        let anchorFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
-        statusItemScreenFrame = anchorFrame
-        let visibleFrame = buttonWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? anchorFrame
-        let panelSize = preferredPanelSize(visibleFrame: visibleFrame)
-        panel.setFrame(
-            StatusMenuPanelLayout.frame(
-                anchorFrame: anchorFrame,
-                visibleFrame: visibleFrame,
-                panelSize: panelSize
-            ),
-            display: true
-        )
-        panel.orderFrontRegardless()
-        panel.makeKey()
-        installEventMonitorsAfterOpeningClick()
-    }
-
-    private func preferredPanelSize(visibleFrame: NSRect) -> NSSize {
-        guard let contentView = panel.contentViewController?.view else {
-            return StatusMenuPanelLayout.fallbackSize
-        }
-        contentView.setFrameSize(StatusMenuPanelLayout.fallbackSize)
-        contentView.layoutSubtreeIfNeeded()
-        return StatusMenuPanelLayout.panelSize(
-            fittingHeight: contentView.fittingSize.height,
-            visibleFrame: visibleFrame
-        )
-    }
-
-    private func closePanel() {
-        guard panel.isVisible else {
-            removeEventMonitors()
-            return
-        }
-        panel.orderOut(nil)
-        removeEventMonitors()
-    }
-
-    private func installEventMonitorsAfterOpeningClick() {
-        removeEventMonitors()
-        localEventMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown, .keyDown]
-        ) { [weak self] event in
-            MainActor.assumeIsolated {
-                self?.handleLocalEvent(event) ?? event
-            }
-        }
-        Task { @MainActor [weak self] in
-            await Task.yield()
-            guard let self, self.panel.isVisible, self.globalEventMonitor == nil else {
-                return
-            }
-            self.globalEventMonitor = NSEvent.addGlobalMonitorForEvents(
-                matching: [.leftMouseDown, .rightMouseDown]
-            ) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    self?.closeAfterGlobalClickIfNeeded()
-                }
-            }
-        }
-    }
-
-    private func closeAfterGlobalClickIfNeeded() {
-        if StatusMenuPanelLayout.shouldCloseForGlobalClick(
-            location: NSEvent.mouseLocation,
-            statusItemFrame: statusItemScreenFrame,
-            panelFrame: panel.frame
-        ) {
-            closePanel()
-        }
-    }
-
-    private func removeEventMonitors() {
-        if let localEventMonitor {
-            NSEvent.removeMonitor(localEventMonitor)
-            self.localEventMonitor = nil
-        }
-        if let globalEventMonitor {
-            NSEvent.removeMonitor(globalEventMonitor)
-            self.globalEventMonitor = nil
-        }
-    }
-
-    private func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
-        guard panel.isVisible else {
-            return event
-        }
-        if event.type == .keyDown, event.keyCode == 53 {
-            closePanel()
-            return nil
-        }
-        if let eventWindow = event.window {
-            if eventWindow == panel {
-                return event
-            }
-            if eventWindow == statusItem.button?.window {
-                return event
-            }
-        }
-        closePanel()
-        return event
     }
 }
 

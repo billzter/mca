@@ -90,7 +90,7 @@ Create or maintain these supporting docs before the corresponding implementation
   - mic/system gain sliders
   - level meters
   - output monitoring toggle
-  - permissions/status panel
+  - permissions/status surfaces
 - Do not expose per-app include/exclude controls in v1; show only global system audio status.
 - Store preferences in app settings; do not require users to reconfigure every launch.
 - Do not store recordings or audio content; `MixedCaptureAudio` only enables a live audio path for QuickTime or another recording app.
