@@ -4,6 +4,14 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
+#define MIXED_AUDIO_ENGINE_STATIC_ASSERT static_assert
+#define MIXED_AUDIO_ENGINE_ALIGNOF alignof
+#else
+#define MIXED_AUDIO_ENGINE_STATIC_ASSERT _Static_assert
+#define MIXED_AUDIO_ENGINE_ALIGNOF _Alignof
+#endif
+
+#ifdef __cplusplus
 extern "C" {
 #endif
 
@@ -26,11 +34,18 @@ typedef struct MixedAudioEngineConfig {
     float mic_gate_attenuation_db;
 } MixedAudioEngineConfig;
 
+MIXED_AUDIO_ENGINE_STATIC_ASSERT(sizeof(MixedAudioEngineConfig) == 52,
+                                 "MixedAudioEngineConfig size changed; update Rust mirror");
+MIXED_AUDIO_ENGINE_STATIC_ASSERT(MIXED_AUDIO_ENGINE_ALIGNOF(MixedAudioEngineConfig) == 4,
+                                 "MixedAudioEngineConfig alignment changed; update Rust mirror");
+
 typedef struct MixedAudioEngineHealth {
     uint64_t frames_mixed;
     uint64_t system_underrun_frames;
     uint64_t mic_underrun_frames;
     uint64_t clipped_samples;
+    uint64_t system_queue_overflow_frames;
+    uint64_t mic_queue_overflow_frames;
     uint32_t system_queue_frames;
     uint32_t mic_queue_frames;
     int32_t source_frame_delta;
@@ -43,6 +58,11 @@ typedef struct MixedAudioEngineHealth {
     uint32_t shared_ring_fill_error_abs_frames;
     uint64_t shared_ring_overrun_frames;
 } MixedAudioEngineHealth;
+
+MIXED_AUDIO_ENGINE_STATIC_ASSERT(sizeof(MixedAudioEngineHealth) == 112,
+                                 "MixedAudioEngineHealth size changed; update Rust mirror");
+MIXED_AUDIO_ENGINE_STATIC_ASSERT(MIXED_AUDIO_ENGINE_ALIGNOF(MixedAudioEngineHealth) == 8,
+                                 "MixedAudioEngineHealth alignment changed; update Rust mirror");
 
 typedef struct MixedAudioEngineHandle MixedAudioEngineHandle;
 typedef struct MixedAudioSessionHandle MixedAudioSessionHandle;
@@ -82,6 +102,8 @@ int32_t mixed_audio_engine_get_health(
 
 MixedAudioSessionHandle *mixed_audio_session_create(MixedAudioSessionConfig config);
 void mixed_audio_session_destroy(MixedAudioSessionHandle *handle);
+int32_t mixed_audio_session_unlink_default_shared_memory(void);
+int32_t mixed_audio_session_unlink_session_shared_memory(MixedAudioSessionHandle *handle);
 
 uint32_t mixed_audio_session_push_system_interleaved_stereo(
     MixedAudioSessionHandle *handle,
@@ -96,6 +118,8 @@ uint32_t mixed_audio_session_push_mic_mono(
 uint32_t mixed_audio_session_mix_and_write(
     MixedAudioSessionHandle *handle,
     uint32_t frames);
+
+int32_t mixed_audio_session_clear_shared_memory(MixedAudioSessionHandle *handle);
 
 int32_t mixed_audio_session_reset_sources(MixedAudioSessionHandle *handle);
 
@@ -120,5 +144,8 @@ int32_t mixed_audio_session_get_health(
 #ifdef __cplusplus
 }
 #endif
+
+#undef MIXED_AUDIO_ENGINE_STATIC_ASSERT
+#undef MIXED_AUDIO_ENGINE_ALIGNOF
 
 #endif

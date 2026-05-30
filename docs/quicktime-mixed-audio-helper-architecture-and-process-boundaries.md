@@ -41,7 +41,7 @@ This transport is not assumed safe until proven. The HAL plug-in runs inside san
 
 Shared memory contains the final mixed stream, not raw sources. The app captures global system audio and the selected microphone, passes those buffers into the Rust mixer, and the Rust mixer writes the mixed stereo output into shared memory. The HAL plug-in reads that final stream and presents it to Core Audio as the input from `Mixed Capture Audio`.
 
-Shared memory is a live transport, not storage. The app should unlink shared memory when the session ends and should never persist mic, system, or mixed audio frames to logs, diagnostics, preferences, or support files.
+Shared memory is a live transport, not storage. The POSIX object may persist across app restarts so a still-running HAL client can resync by generation, but producer shutdown must clear the frame region and heartbeat before unmapping. The app should never persist mic, system, or mixed audio frames to logs, diagnostics, preferences, or support files.
 
 ```text
 global system audio
@@ -209,20 +209,20 @@ The Swift app owns the producer lifecycle. Rust owns the mixer and shared-memory
 
 - Callback-facing Swift-to-Rust FFI functions should only copy source frames into preallocated Rust buffers, update atomics/counters, and return. Mixing and shared-memory writing happen in a bounded Rust processing step.
 - Mixing/shared-memory writing is driven by a dedicated active-session mixer thread targeting the HAL 48 kHz output cadence, not directly by the system tap callback or an ordinary app dispatch timer.
-- The mixer thread should use high-QoS scheduling at minimum; prototype whether a real-time-class/pthread time-constraint policy is required.
+- The mixer owner thread should idle at utility QoS/standard policy and promote itself to high QoS plus pthread time-constraint policy only while an active session, bridge, or reset needs mixer work.
 - Active sessions must prevent App Nap and timer coalescing from starving the mixer path.
 - Measure worst-case mixer wakeup latency under load. The fixed target fill must exceed realistic wakeup jitter with margin, or the ABI constant and HAL-reported latency must be raised together.
 - Rust monitors shared-ring fill level and applies bounded final-stage rate trim to avoid producer-to-HAL drift.
-- Create and initialize shared memory before starting the HAL-visible session.
+- Hold producer ownership before creating or adopting the HAL-visible production shared-memory object. If a fresh legacy heartbeat is present after ownership is acquired, wait for the bounded heartbeat-stale window before adopting; if the heartbeat remains live, a second release producer must fail rather than double-write the single-producer ring and a debug producer may fall back to an isolated `/mca.mix.debug.<pid>` mapping.
 - Validate and write the header before writing frames.
-- Increment `generation` when the producer restarts or the buffer is reinitialized.
+- Seed the producer write index from the adopted header and increment `generation` on restart so an already-mapped HAL reader resyncs without recorder intervention.
 - Update `producer_heartbeat_nanos` periodically while the session is active.
 - Write only interleaved 48 kHz stereo Float32 frames.
 - Advance `write_frame_index` only after frames are fully written.
 - If the writer would lap the reader, drop the oldest unread frames and increment `overrun_count` and `dropped_frame_count`.
 - Keep the shared ring near the fixed target-fill ABI constant when a HAL client is actively reading.
 - Treat shared-ring fill error as sync-relevant: `actual_fill - MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES` is residual A/V sync error from the app-to-HAL buffer.
-- On clean stop, stop writing frames, leave the last counters visible, and unlink/clean up according to the app lifecycle policy.
+- On clean stop and ordinary app termination, stop writing frames, clear the frame region and heartbeat, and leave non-audio counters/header state visible for restart adoption. Ordinary app termination must use the synchronous stop/clear path before returning from termination. Unlink only from explicit discard/reset paths when this app owns the production transport.
 
 ## Consumer Rules
 
@@ -278,12 +278,13 @@ Stop:
 2. App stops capture sources.
 3. App stops Rust mixer writes.
 4. HAL plug-in detects missing/stale/insufficient frames and returns silence.
-5. App may keep shared memory mapped for diagnostics or unlink during shutdown.
+5. App clears the shared-memory frame region and heartbeat so stale objects do not retain audio samples. During ordinary app termination this clear happens synchronously before termination returns.
+6. Normal stop and ordinary app termination leave the shared-memory object mapped/in place for restart adoption; explicit discard/reset paths intentionally unlink it only from the producer that owns the production transport.
 
 Crash/restart:
 
 1. HAL plug-in returns silence when heartbeat becomes stale.
-2. Restarted app creates or reinitializes shared memory and increments `generation`.
+2. Restarted app adopts the existing shared-memory object when the header is valid, seeds its write index from the existing header, and publishes a higher `generation` on the next write.
 3. HAL plug-in notices generation change, resyncs, and resumes reading once valid frames arrive.
 
 ## Failure Behavior

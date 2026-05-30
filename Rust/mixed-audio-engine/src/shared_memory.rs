@@ -1,15 +1,22 @@
 pub use crate::generated_shared_memory_abi::{
-    MIXED_AUDIO_PHASE2_MARKER_LEFT, MIXED_AUDIO_PHASE2_MARKER_RIGHT, MIXED_AUDIO_SHM_MAGIC,
-    MIXED_AUDIO_SHM_NAME, MIXED_AUDIO_SHM_VERSION, MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES,
+    MIXED_AUDIO_HEARTBEAT_STALE_NANOS, MIXED_AUDIO_OUTPUT_CHANNEL_COUNT,
+    MIXED_AUDIO_OUTPUT_SAMPLE_RATE, MIXED_AUDIO_PHASE2_MARKER_LEFT,
+    MIXED_AUDIO_PHASE2_MARKER_RIGHT, MIXED_AUDIO_SHM_MAGIC, MIXED_AUDIO_SHM_NAME,
+    MIXED_AUDIO_SHM_VERSION, MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES,
 };
 use crate::{
     MixedAudioEngineHealth, MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS,
     MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE,
 };
+use std::collections::HashSet;
 use std::ffi::{c_char, c_int, c_void, CString};
+use std::fs::{File, OpenOptions, Permissions};
 use std::mem;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 const O_RDWR: c_int = 0x0002;
 const O_CREAT: c_int = 0x0200;
@@ -19,8 +26,18 @@ const PROT_READ: c_int = 0x01;
 const PROT_WRITE: c_int = 0x02;
 const MAP_SHARED: c_int = 0x0001;
 const MAP_FAILED: *mut c_void = !0usize as *mut c_void;
+const LOCK_EX: c_int = 0x02;
+const LOCK_NB: c_int = 0x04;
+const LOCK_UN: c_int = 0x08;
+const EAGAIN: c_int = 11;
+const EWOULDBLOCK: c_int = 35;
 
 pub trait SharedMemoryAudioWriter {
+    fn current_generation(&self) -> u64;
+    fn current_write_frame_index(&self) -> u64;
+    fn current_heartbeat_nanos(&self) -> u64;
+    fn clear_audio_and_heartbeat(&mut self);
+
     fn write_audio_frames(
         &mut self,
         first_frame_index: u64,
@@ -209,6 +226,31 @@ impl SharedMemoryLayout {
 }
 
 impl SharedMemoryAudioWriter for SharedMemoryLayout {
+    fn current_generation(&self) -> u64 {
+        self.header().generation.load(Ordering::Acquire)
+    }
+
+    fn current_write_frame_index(&self) -> u64 {
+        self.header().write_frame_index.load(Ordering::Acquire)
+    }
+
+    fn current_heartbeat_nanos(&self) -> u64 {
+        self.header()
+            .producer_heartbeat_nanos
+            .load(Ordering::Acquire)
+    }
+
+    fn clear_audio_and_heartbeat(&mut self) {
+        let frame_start = mem::size_of::<MixedAudioSharedMemoryHeader>();
+        let frame_byte_count = self.capacity_frames as usize
+            * MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS as usize
+            * mem::size_of::<f32>();
+        self.bytes_mut()[frame_start..frame_start + frame_byte_count].fill(0);
+        self.header_mut()
+            .producer_heartbeat_nanos
+            .store(0, Ordering::Release);
+    }
+
     fn write_audio_frames(
         &mut self,
         first_frame_index: u64,
@@ -224,7 +266,11 @@ impl SharedMemoryAudioWriter for SharedMemoryLayout {
             Ordering::Relaxed,
         );
         header.dropped_frame_count.store(
-            health.system_drift_drop_frames + health.mic_drift_drop_frames + status.overrun_count,
+            health.system_drift_drop_frames
+                + health.mic_drift_drop_frames
+                + health.system_queue_overflow_frames
+                + health.mic_queue_overflow_frames
+                + status.overrun_count,
             Ordering::Relaxed,
         );
         header
@@ -235,13 +281,83 @@ impl SharedMemoryAudioWriter for SharedMemoryLayout {
 }
 
 pub struct PosixSharedMemoryWriter {
-    name: CString,
     mapping: *mut u8,
     byte_count: usize,
     capacity_frames: u32,
+    production_lock: Option<ProductionSharedMemoryLock>,
+}
+
+pub(crate) struct ProductionSharedMemoryLock {
+    path: String,
+    file: File,
+}
+
+impl ProductionSharedMemoryLock {
+    pub(crate) fn try_acquire_for_name(name: &str) -> Result<Option<Self>, String> {
+        let path = production_lock_path_for_name(name);
+        let mut held_paths = production_lock_registry()
+            .lock()
+            .map_err(|_| "production shared memory lock registry poisoned".to_string())?;
+        if held_paths.contains(&path) {
+            return Ok(None);
+        }
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|error| format!("open production shared memory lock failed: {error}"))?;
+        file.set_permissions(Permissions::from_mode(0o600))
+            .map_err(|error| format!("set production shared memory lock mode failed: {error}"))?;
+        let status = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
+        if status != 0 {
+            let error = errno();
+            if error == EWOULDBLOCK || error == EAGAIN {
+                return Ok(None);
+            }
+            return Err(format!(
+                "acquire production shared memory lock failed errno={error}"
+            ));
+        }
+
+        held_paths.insert(path.clone());
+        Ok(Some(Self { path, file }))
+    }
+}
+
+impl Drop for ProductionSharedMemoryLock {
+    fn drop(&mut self) {
+        unsafe {
+            flock(self.file.as_raw_fd(), LOCK_UN);
+        }
+        if let Ok(mut held_paths) = production_lock_registry().lock() {
+            held_paths.remove(&self.path);
+        }
+    }
 }
 
 impl SharedMemoryAudioWriter for PosixSharedMemoryWriter {
+    fn current_generation(&self) -> u64 {
+        self.header().generation.load(Ordering::Acquire)
+    }
+
+    fn current_write_frame_index(&self) -> u64 {
+        self.header().write_frame_index.load(Ordering::Acquire)
+    }
+
+    fn current_heartbeat_nanos(&self) -> u64 {
+        self.header()
+            .producer_heartbeat_nanos
+            .load(Ordering::Acquire)
+    }
+
+    fn clear_audio_and_heartbeat(&mut self) {
+        self.clear_mapped_audio_and_heartbeat();
+    }
+
     fn write_audio_frames(
         &mut self,
         first_frame_index: u64,
@@ -262,6 +378,15 @@ impl SharedMemoryAudioWriter for PosixSharedMemoryWriter {
 
 impl PosixSharedMemoryWriter {
     pub fn create(name: &str, capacity_frames: u32) -> Result<Self, String> {
+        Self::create_with_options(name, capacity_frames, None, false)
+    }
+
+    pub(crate) fn create_with_options(
+        name: &str,
+        capacity_frames: u32,
+        production_lock: Option<ProductionSharedMemoryLock>,
+        unlink_after_map: bool,
+    ) -> Result<Self, String> {
         if capacity_frames == 0 {
             return Err("capacity_frames must be nonzero".to_string());
         }
@@ -270,7 +395,14 @@ impl PosixSharedMemoryWriter {
         let byte_count = total_byte_count(capacity_frames);
 
         unsafe {
-            shm_unlink(name.as_ptr());
+            if let Some(mut writer) = Self::adopt_existing(&name, byte_count, capacity_frames)? {
+                writer.production_lock = production_lock;
+                if unlink_after_map {
+                    Self::unlink_cstring(&name)?;
+                }
+                return Ok(writer);
+            }
+
             let previous_umask = umask(0);
             let fd = shm_open(
                 name.as_ptr(),
@@ -304,13 +436,143 @@ impl PosixSharedMemoryWriter {
             ptr::write_bytes(mapping, 0, byte_count);
 
             let mut writer = Self {
-                name,
                 mapping: mapping as *mut u8,
                 byte_count,
                 capacity_frames,
+                production_lock,
             };
             writer.initialize_header();
+            if unlink_after_map {
+                Self::unlink_cstring(&name)?;
+            }
             Ok(writer)
+        }
+    }
+
+    unsafe fn adopt_existing(
+        name: &CString,
+        byte_count: usize,
+        capacity_frames: u32,
+    ) -> Result<Option<Self>, String> {
+        let existing_fd = shm_open(name.as_ptr(), O_RDWR, 0);
+        if existing_fd < 0 {
+            return Ok(None);
+        }
+
+        let existing_file = File::from_raw_fd(existing_fd);
+        let existing_len = existing_file
+            .metadata()
+            .map_err(|error| format!("fstat existing shared memory failed: {error}"))?
+            .len();
+        if existing_len < byte_count as u64 {
+            drop(existing_file);
+            shm_unlink(name.as_ptr());
+            return Ok(None);
+        }
+
+        let mapping = mmap(
+            ptr::null_mut(),
+            byte_count,
+            PROT_READ | PROT_WRITE,
+            MAP_SHARED,
+            existing_file.as_raw_fd(),
+            0,
+        );
+        if mapping == MAP_FAILED {
+            return Err(format!("mmap existing failed errno={}", errno()));
+        }
+
+        if !header_is_valid(
+            mapping as *const MixedAudioSharedMemoryHeader,
+            capacity_frames,
+        ) {
+            munmap(mapping, byte_count);
+            drop(existing_file);
+            shm_unlink(name.as_ptr());
+            return Ok(None);
+        }
+
+        Ok(Some(Self {
+            mapping: mapping as *mut u8,
+            byte_count,
+            capacity_frames,
+            production_lock: None,
+        }))
+    }
+
+    pub fn unlink_name(name: &str) -> Result<(), String> {
+        let name = CString::new(name).map_err(|_| "shared memory name contains NUL".to_string())?;
+        unsafe { Self::unlink_cstring(&name) }
+    }
+
+    unsafe fn unlink_cstring(name: &CString) -> Result<(), String> {
+        if shm_unlink(name.as_ptr()) == 0 {
+            Ok(())
+        } else {
+            let error = errno();
+            if error == 2 {
+                Ok(())
+            } else {
+                Err(format!("shm_unlink failed errno={error}"))
+            }
+        }
+    }
+
+    pub(crate) fn owns_production_lock(&self) -> bool {
+        self.production_lock.is_some()
+    }
+
+    pub(crate) fn existing_producer_is_live(
+        name: &str,
+        capacity_frames: u32,
+    ) -> Result<bool, String> {
+        if capacity_frames == 0 {
+            return Ok(false);
+        }
+        let name = CString::new(name).map_err(|_| "shared memory name contains NUL".to_string())?;
+        let byte_count = total_byte_count(capacity_frames);
+
+        unsafe {
+            let existing_fd = shm_open(name.as_ptr(), O_RDWR, 0);
+            if existing_fd < 0 {
+                return Ok(false);
+            }
+
+            let existing_file = File::from_raw_fd(existing_fd);
+            let existing_len = existing_file
+                .metadata()
+                .map_err(|error| format!("fstat existing shared memory failed: {error}"))?
+                .len();
+            if existing_len < byte_count as u64 {
+                return Ok(false);
+            }
+
+            let mapping = mmap(
+                ptr::null_mut(),
+                byte_count,
+                PROT_READ | PROT_WRITE,
+                MAP_SHARED,
+                existing_file.as_raw_fd(),
+                0,
+            );
+            if mapping == MAP_FAILED {
+                return Err(format!("mmap existing failed errno={}", errno()));
+            }
+
+            let is_live = if header_is_valid(
+                mapping as *const MixedAudioSharedMemoryHeader,
+                capacity_frames,
+            ) {
+                let header = &*(mapping as *const MixedAudioSharedMemoryHeader);
+                let heartbeat_nanos = header.producer_heartbeat_nanos.load(Ordering::Acquire);
+                heartbeat_nanos != 0
+                    && now_nanos().saturating_sub(heartbeat_nanos)
+                        <= MIXED_AUDIO_HEARTBEAT_STALE_NANOS
+            } else {
+                false
+            };
+            munmap(mapping, byte_count);
+            Ok(is_live)
         }
     }
 
@@ -330,6 +592,8 @@ impl PosixSharedMemoryWriter {
                     ((first_frame_index + frame as u64) % self.capacity_frames as u64) as usize;
                 let dst = frames.add(slot * MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS as usize);
                 let src = frame * MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS as usize;
+                // If the producer laps the consumer, an overrun can race a HAL read of this
+                // slot. That benign torn frame is preferable to locking the real-time path.
                 *dst = samples[src];
                 *dst.add(1) = samples[src + 1];
             }
@@ -349,6 +613,8 @@ impl PosixSharedMemoryWriter {
             header.dropped_frame_count.store(
                 health.system_drift_drop_frames
                     + health.mic_drift_drop_frames
+                    + health.system_queue_overflow_frames
+                    + health.mic_queue_overflow_frames
                     + status.overrun_count,
                 Ordering::Relaxed,
             );
@@ -359,6 +625,19 @@ impl PosixSharedMemoryWriter {
                 .write_frame_index
                 .store(write_frame_index, Ordering::Release);
             status
+        }
+    }
+
+    fn clear_mapped_audio_and_heartbeat(&mut self) {
+        unsafe {
+            ptr::write_bytes(
+                self.frames_mut_ptr(),
+                0,
+                self.capacity_frames as usize * MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS as usize,
+            );
+            self.header_mut()
+                .producer_heartbeat_nanos
+                .store(0, Ordering::Release);
         }
     }
 
@@ -380,6 +659,10 @@ impl PosixSharedMemoryWriter {
         unsafe { &mut *(self.mapping as *mut MixedAudioSharedMemoryHeader) }
     }
 
+    fn header(&self) -> &MixedAudioSharedMemoryHeader {
+        unsafe { &*(self.mapping as *const MixedAudioSharedMemoryHeader) }
+    }
+
     fn frames_mut_ptr(&mut self) -> *mut f32 {
         unsafe {
             self.mapping
@@ -390,10 +673,8 @@ impl PosixSharedMemoryWriter {
 
 impl Drop for PosixSharedMemoryWriter {
     fn drop(&mut self) {
-        unsafe {
-            munmap(self.mapping as *mut c_void, self.byte_count);
-            shm_unlink(self.name.as_ptr());
-        }
+        self.clear_mapped_audio_and_heartbeat();
+        unsafe { munmap(self.mapping as *mut c_void, self.byte_count) };
     }
 }
 
@@ -437,6 +718,38 @@ fn shared_ring_write_status(
         overrun_frames,
         overrun_count,
     }
+}
+
+fn header_is_valid(header: *const MixedAudioSharedMemoryHeader, capacity_frames: u32) -> bool {
+    if header.is_null() {
+        return false;
+    }
+    let header = unsafe { &*header };
+    header.magic == MIXED_AUDIO_SHM_MAGIC
+        && header.version == MIXED_AUDIO_SHM_VERSION
+        && header.sample_rate == MIXED_AUDIO_ENGINE_OUTPUT_SAMPLE_RATE
+        && header.channel_count == MIXED_AUDIO_ENGINE_OUTPUT_CHANNELS
+        && header.capacity_frames == capacity_frames
+        && header.target_shared_fill_frames == MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES
+}
+
+fn production_lock_registry() -> &'static Mutex<HashSet<String>> {
+    static REGISTRY: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn production_lock_path_for_name(name: &str) -> String {
+    let sanitized_name: String = name
+        .chars()
+        .map(|character| match character {
+            '/' | '\0' => '_',
+            character => character,
+        })
+        .collect();
+    std::env::temp_dir()
+        .join(format!("{sanitized_name}.producer.lock"))
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn signed_frame_delta(actual_frames: u64, target_frames: u64) -> i32 {
@@ -517,8 +830,30 @@ extern "C" {
     fn mach_absolute_time() -> u64;
     fn mach_timebase_info(info: *mut MachTimebaseInfo) -> c_int;
     fn signal(sig: c_int, handler: extern "C" fn(c_int)) -> extern "C" fn(c_int);
+    fn flock(fd: c_int, operation: c_int) -> c_int;
 }
 
 fn errno() -> c_int {
     unsafe { *__error() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn production_lock_uses_user_temp_directory_and_owner_only_mode() {
+        let name = format!("/mca.mix.test.lock-path.{}", std::process::id());
+        let lock = ProductionSharedMemoryLock::try_acquire_for_name(&name)
+            .unwrap()
+            .unwrap();
+        let expected_prefix = std::env::temp_dir();
+        assert!(lock
+            .path
+            .starts_with(expected_prefix.to_string_lossy().as_ref()));
+
+        let mode = std::fs::metadata(&lock.path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
 }

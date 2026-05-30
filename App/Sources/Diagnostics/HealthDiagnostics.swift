@@ -17,6 +17,8 @@ struct HealthSnapshot: Equatable {
     var micQueueFrames: UInt32
     var systemQueueDroppedFrames: UInt64 = 0
     var micQueueDroppedFrames: UInt64 = 0
+    var systemQueueOverflowFrames: UInt64 = 0
+    var micQueueOverflowFrames: UInt64 = 0
     var sourceFrameDelta: Int32
     var sourceFrameDeltaAbs: UInt32
     var systemDriftDropFrames: UInt64
@@ -110,7 +112,9 @@ struct RecentHealthAccumulator {
         let clippedSamples = latest.clippedSamples.saturatingSubtract(baseline.clippedSamples)
         let sourceQueueDroppedFrames =
             latest.systemQueueDroppedFrames.saturatingSubtract(baseline.systemQueueDroppedFrames) +
-            latest.micQueueDroppedFrames.saturatingSubtract(baseline.micQueueDroppedFrames)
+            latest.micQueueDroppedFrames.saturatingSubtract(baseline.micQueueDroppedFrames) +
+            latest.systemQueueOverflowFrames.saturatingSubtract(baseline.systemQueueOverflowFrames) +
+            latest.micQueueOverflowFrames.saturatingSubtract(baseline.micQueueOverflowFrames)
         let sharedRingOverrunFrames = latest.sharedRingOverrunFrames.saturatingSubtract(baseline.sharedRingOverrunFrames)
         let suppressSharedRingOverrun = !recorderActive ||
             latest.sharedRingFillErrorAbsFrames > sharedRingWaitingForRecorderErrorThresholdFrames
@@ -465,13 +469,16 @@ struct HealthDiagnosticSummary: Equatable {
             )
         )
 
-        let sourceQueueDroppedFrames = snapshot.systemQueueDroppedFrames + snapshot.micQueueDroppedFrames
+        let sourceQueueDroppedFrames = snapshot.systemQueueDroppedFrames +
+            snapshot.micQueueDroppedFrames +
+            snapshot.systemQueueOverflowFrames +
+            snapshot.micQueueOverflowFrames
         if sourceQueueDroppedFrames > 0 {
             userVisibleFindings.append(
                 DiagnosticTerm(
                     id: "source_queue_dropped_frames",
                     name: "Source Queue Drops",
-                    value: "system=\(snapshot.systemQueueDroppedFrames), mic=\(snapshot.micQueueDroppedFrames)",
+                    value: "system=\(snapshot.systemQueueDroppedFrames + snapshot.systemQueueOverflowFrames), mic=\(snapshot.micQueueDroppedFrames + snapshot.micQueueOverflowFrames)",
                     explanation: "Source callbacks delivered more frames than the mixer queue could accept without blocking.",
                     visibility: .userVisible
                 )
@@ -527,6 +534,8 @@ struct HealthDiagnosticSummary: Equatable {
             "mic_queue_frames=\(snapshot.micQueueFrames)",
             "system_queue_dropped_frames=\(snapshot.systemQueueDroppedFrames)",
             "mic_queue_dropped_frames=\(snapshot.micQueueDroppedFrames)",
+            "system_queue_overflow_frames=\(snapshot.systemQueueOverflowFrames)",
+            "mic_queue_overflow_frames=\(snapshot.micQueueOverflowFrames)",
             "source_frame_delta=\(snapshot.sourceFrameDelta)",
             "source_frame_delta_abs=\(snapshot.sourceFrameDeltaAbs)",
             "system_drift_drop_frames=\(snapshot.systemDriftDropFrames)",

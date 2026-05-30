@@ -10,6 +10,9 @@ private func MCA_LiveMixerStart(
 @_silgen_name("MCA_LiveMixerStop")
 private func MCA_LiveMixerStop()
 
+@_silgen_name("MCA_LiveMixerDiscardSharedMemory")
+private func MCA_LiveMixerDiscardSharedMemory() -> Int32
+
 @_silgen_name("MCA_LiveMixerSetLevels")
 private func MCA_LiveMixerSetLevels(
     _ systemGain: Float,
@@ -52,7 +55,9 @@ private enum MCALiveMixerHealthCounter {
     static let sharedRingOverrunFrames = 14
     static let systemQueueDroppedFrames = 15
     static let micQueueDroppedFrames = 16
-    static let count = 17
+    static let systemQueueOverflowFrames = 17
+    static let micQueueOverflowFrames = 18
+    static let count = 19
 
     static func healthSnapshot(from counters: [UInt64]) -> HealthSnapshot {
         precondition(counters.count >= count)
@@ -65,6 +70,8 @@ private enum MCALiveMixerHealthCounter {
             micQueueFrames: UInt32(clamping: counters[micQueueFrames]),
             systemQueueDroppedFrames: counters[systemQueueDroppedFrames],
             micQueueDroppedFrames: counters[micQueueDroppedFrames],
+            systemQueueOverflowFrames: counters[systemQueueOverflowFrames],
+            micQueueOverflowFrames: counters[micQueueOverflowFrames],
             sourceFrameDelta: Int32(clamping: Int64(bitPattern: counters[sourceFrameDelta])),
             sourceFrameDeltaAbs: UInt32(clamping: counters[sourceFrameDeltaAbs]),
             systemDriftDropFrames: counters[systemDriftDropFrames],
@@ -84,12 +91,122 @@ private enum MCALiveMixerCaptureMode {
     static let selectedApps = Int32(1)
 }
 
+protocol AppLiveMixerNativeControlling: AnyObject, Sendable {
+    func start(
+        microphoneID: String?,
+        captureMode: Int32,
+        selectedAppBundleIDs: String
+    ) -> Int32
+    func stop()
+    func discardSharedMemory() -> Int32
+    func setAudioLevels(systemGain: Float, microphoneGain: Float) -> Int32
+    func setVoiceEnhancement(enabled: Bool) -> Int32
+    func copyHealthCounters(_ counters: UnsafeMutableBufferPointer<UInt64>) -> Int32
+    func copyLevels(
+        outSystemPeak: UnsafeMutablePointer<Float>,
+        outMicPeak: UnsafeMutablePointer<Float>
+    ) -> Int32
+    func supportsSelectedAppProcessRestore() -> Bool
+}
+
+protocol LiveMixerActivityAsserting: AnyObject, Sendable {
+    func begin()
+    func end()
+}
+
+private final class AppLiveMixerNativeClient: AppLiveMixerNativeControlling {
+    func start(
+        microphoneID: String?,
+        captureMode: Int32,
+        selectedAppBundleIDs: String
+    ) -> Int32 {
+        let callNative: (UnsafePointer<CChar>?) -> Int32 = { microphonePointer in
+            if selectedAppBundleIDs.isEmpty {
+                return MCA_LiveMixerStart(microphonePointer, captureMode, nil)
+            }
+            return selectedAppBundleIDs.withCString { bundlePointer in
+                MCA_LiveMixerStart(microphonePointer, captureMode, bundlePointer)
+            }
+        }
+
+        if let microphoneID {
+            return microphoneID.withCString { pointer in
+                callNative(pointer)
+            }
+        }
+        return callNative(nil)
+    }
+
+    func stop() {
+        MCA_LiveMixerStop()
+    }
+
+    func discardSharedMemory() -> Int32 {
+        MCA_LiveMixerDiscardSharedMemory()
+    }
+
+    func setAudioLevels(systemGain: Float, microphoneGain: Float) -> Int32 {
+        MCA_LiveMixerSetLevels(systemGain, microphoneGain)
+    }
+
+    func setVoiceEnhancement(enabled: Bool) -> Int32 {
+        MCA_LiveMixerSetVoiceEnhancement(enabled ? 1 : 0)
+    }
+
+    func copyHealthCounters(_ counters: UnsafeMutableBufferPointer<UInt64>) -> Int32 {
+        MCA_LiveMixerCopyHealthCounters(counters.baseAddress!, UInt32(counters.count))
+    }
+
+    func copyLevels(
+        outSystemPeak: UnsafeMutablePointer<Float>,
+        outMicPeak: UnsafeMutablePointer<Float>
+    ) -> Int32 {
+        MCA_LiveMixerCopyLevels(outSystemPeak, outMicPeak)
+    }
+
+    func supportsSelectedAppProcessRestore() -> Bool {
+        MCA_LiveMixerSupportsSelectedAppProcessRestore() != 0
+    }
+}
+
+private final class ProcessInfoLiveMixerActivityAssertion: LiveMixerActivityAsserting, @unchecked Sendable {
+    private var token: NSObjectProtocol?
+
+    func begin() {
+        guard token == nil else {
+            return
+        }
+        token = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .latencyCritical],
+            reason: "Mixed Capture Audio live mixing"
+        )
+    }
+
+    func end() {
+        guard let token else {
+            return
+        }
+        ProcessInfo.processInfo.endActivity(token)
+        self.token = nil
+    }
+}
+
 final class AppLiveMixerController: LiveMixerControlling {
     private let controlQueue = DispatchQueue(label: "com.minamiktr.mca.live-mixer-control")
     private let mixedCaptureDeviceUID = "com.minamiktr.mca.device.MixedCaptureAudio"
+    private let nativeClient: AppLiveMixerNativeControlling
+    private let activityAssertion: LiveMixerActivityAsserting
+
+    init(
+        nativeClient: AppLiveMixerNativeControlling = AppLiveMixerNativeClient(),
+        activityAssertion: LiveMixerActivityAsserting = ProcessInfoLiveMixerActivityAssertion()
+    ) {
+        self.nativeClient = nativeClient
+        self.activityAssertion = activityAssertion
+    }
 
     var supportsSelectedAppProcessRestore: Bool {
-        MCA_LiveMixerSupportsSelectedAppProcessRestore() != 0
+        nativeClient.supportsSelectedAppProcessRestore()
     }
 
     @MainActor func start(
@@ -97,28 +214,23 @@ final class AppLiveMixerController: LiveMixerControlling {
         completion: @MainActor @escaping (LiveMixerStartResult) -> Void
     ) {
         let requestedConfiguration = configuration
+        let nativeClient = nativeClient
+        let activityAssertion = activityAssertion
         controlQueue.async {
             let captureMode = requestedConfiguration.captureMode == .selectedApps
                 ? MCALiveMixerCaptureMode.selectedApps
                 : MCALiveMixerCaptureMode.globalSystemAudio
             let selectedBundleIDs = requestedConfiguration.selectedAppBundleIDs.joined(separator: "\n")
 
-            let callNative: (UnsafePointer<CChar>?) -> Int32 = { microphonePointer in
-                if selectedBundleIDs.isEmpty {
-                    return MCA_LiveMixerStart(microphonePointer, captureMode, nil)
-                }
-                return selectedBundleIDs.withCString { bundlePointer in
-                    MCA_LiveMixerStart(microphonePointer, captureMode, bundlePointer)
-                }
-            }
-
-            let status: Int32
-            if let requestedMicrophoneID = requestedConfiguration.microphoneID {
-                status = requestedMicrophoneID.withCString { pointer in
-                    callNative(pointer)
-                }
+            let status = nativeClient.start(
+                microphoneID: requestedConfiguration.microphoneID,
+                captureMode: captureMode,
+                selectedAppBundleIDs: selectedBundleIDs
+            )
+            if status == 0 {
+                activityAssertion.begin()
             } else {
-                status = callNative(nil)
+                activityAssertion.end()
             }
             DispatchQueue.main.async {
                 completion(status == 0 ? .started : .failed(statusCode: status))
@@ -127,32 +239,51 @@ final class AppLiveMixerController: LiveMixerControlling {
     }
 
     @MainActor func stop(completion: @MainActor @escaping () -> Void) {
+        let nativeClient = nativeClient
+        let activityAssertion = activityAssertion
         controlQueue.async {
-            MCA_LiveMixerStop()
+            nativeClient.stop()
+            activityAssertion.end()
             DispatchQueue.main.async {
                 completion()
             }
         }
     }
 
+    @MainActor func stopSynchronouslyForTermination() {
+        let nativeClient = nativeClient
+        let activityAssertion = activityAssertion
+        controlQueue.sync {
+            nativeClient.stop()
+            activityAssertion.end()
+        }
+    }
+
+    @MainActor func discardSharedMemory() {
+        let nativeClient = nativeClient
+        let activityAssertion = activityAssertion
+        controlQueue.sync {
+            _ = nativeClient.discardSharedMemory()
+            activityAssertion.end()
+        }
+    }
+
     @MainActor func setAudioLevels(_ settings: AudioLevelSettings) {
         let requestedSettings = settings
+        let nativeClient = nativeClient
         controlQueue.async {
-            _ = MCA_LiveMixerSetLevels(
-                requestedSettings.systemGain,
-                requestedSettings.microphoneGain
+            _ = nativeClient.setAudioLevels(
+                systemGain: requestedSettings.systemGain,
+                microphoneGain: requestedSettings.microphoneGain
             )
-            _ = MCA_LiveMixerSetVoiceEnhancement(requestedSettings.enhanceVoice ? 1 : 0)
+            _ = nativeClient.setVoiceEnhancement(enabled: requestedSettings.enhanceVoice)
         }
     }
 
     @MainActor func currentHealthSnapshot() -> HealthSnapshot? {
         var counters = Array(repeating: UInt64(0), count: MCALiveMixerHealthCounter.count)
         let status = counters.withUnsafeMutableBufferPointer { buffer in
-            MCA_LiveMixerCopyHealthCounters(
-                buffer.baseAddress!,
-                UInt32(MCALiveMixerHealthCounter.count)
-            )
+            nativeClient.copyHealthCounters(buffer)
         }
         guard status == 0 else {
             return nil
@@ -163,7 +294,7 @@ final class AppLiveMixerController: LiveMixerControlling {
     @MainActor func currentSourceLevelSnapshot() -> SourceLevelMeterSnapshot? {
         var systemPeak: Float = 0.0
         var micPeak: Float = 0.0
-        let status = MCA_LiveMixerCopyLevels(&systemPeak, &micPeak)
+        let status = nativeClient.copyLevels(outSystemPeak: &systemPeak, outMicPeak: &micPeak)
         guard status == 0 else {
             return nil
         }

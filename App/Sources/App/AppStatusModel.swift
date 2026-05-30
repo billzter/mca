@@ -522,13 +522,33 @@ final class AppStatusModel: ObservableObject {
 
         if shouldStop {
             let wasRunning = liveMixerState == .running || liveMixerState == .failed
-        liveMixerState = wasRunning ? .stopping : .stopped
+            liveMixerState = wasRunning ? .stopping : .stopped
             liveMixerController.stop { [weak self] in
                 self?.completeLiveMixerStop(generation: generation)
             }
         } else {
             liveMixerState = .stopped
         }
+    }
+
+    func terminateLiveMixerSynchronously() {
+        mixerCommandGeneration += 1
+        pendingMixerConfiguration = nil
+        runningMixerConfiguration = nil
+        activeMicrophoneID = nil
+        activeMicrophoneName = nil
+        liveMixerState = .stopped
+        liveMixerController.stopSynchronouslyForTermination()
+    }
+
+    func discardLiveMixerSharedMemory() {
+        mixerCommandGeneration += 1
+        pendingMixerConfiguration = nil
+        runningMixerConfiguration = nil
+        activeMicrophoneID = nil
+        activeMicrophoneName = nil
+        liveMixerState = .stopped
+        liveMixerController.discardSharedMemory()
     }
 
     func refreshLiveMixerHealth() {
@@ -1028,6 +1048,10 @@ private final class NullLiveMixerController: LiveMixerControlling {
     @MainActor func stop(completion: @MainActor @escaping () -> Void) {
         completion()
     }
+
+    @MainActor func stopSynchronouslyForTermination() {}
+
+    @MainActor func discardSharedMemory() {}
 
     @MainActor func setAudioLevels(_ settings: AudioLevelSettings) {
         _ = settings

@@ -135,6 +135,10 @@ final class SetupPresentationTests: XCTestCase {
     func testAppLifecycleUsesExplicitAppKitDelegateMain() {
         assertTrue(AppLifecyclePresentation.usesExplicitAppKitDelegateMain)
     }
+
+    func testAppTerminationDoesNotFinalDiscardSharedMemory() {
+        assertFalse(AppTerminationSharedMemoryPolicy.shouldDiscardSharedMemory())
+    }
 }
 
 private func checklistRow(id: SetupChecklistRowPresentation.ID, status: String) -> SetupChecklistRowPresentation {

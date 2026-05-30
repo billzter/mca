@@ -40,6 +40,163 @@ final class AppStatusModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLiveMixerControllerBeginsActivityAfterSuccessfulNativeStart() async {
+        let nativeClient = FakeAppLiveMixerNativeClient(startStatus: 0)
+        let activityAssertion = FakeLiveMixerActivityAssertion()
+        let controller = AppLiveMixerController(
+            nativeClient: nativeClient,
+            activityAssertion: activityAssertion
+        )
+
+        let result = await startLiveMixer(controller)
+
+        assertEqual(result, .started)
+        assertEqual(nativeClient.startCount, 1)
+        assertEqual(activityAssertion.beginCount, 1)
+        assertEqual(activityAssertion.endCount, 0)
+        assertEqual(activityAssertion.isActive, true)
+    }
+
+    @MainActor
+    func testLiveMixerControllerStopEndsActivityAssertion() async {
+        let nativeClient = FakeAppLiveMixerNativeClient(startStatus: 0)
+        let activityAssertion = FakeLiveMixerActivityAssertion()
+        let controller = AppLiveMixerController(
+            nativeClient: nativeClient,
+            activityAssertion: activityAssertion
+        )
+
+        _ = await startLiveMixer(controller)
+        await stopLiveMixer(controller)
+
+        assertEqual(nativeClient.stopCount, 1)
+        assertEqual(activityAssertion.beginCount, 1)
+        assertEqual(activityAssertion.endCount, 1)
+        assertEqual(activityAssertion.isActive, false)
+    }
+
+    @MainActor
+    func testLiveMixerControllerDiscardSharedMemoryEndsActivityAssertion() async {
+        let nativeClient = FakeAppLiveMixerNativeClient(startStatus: 0)
+        let activityAssertion = FakeLiveMixerActivityAssertion()
+        let controller = AppLiveMixerController(
+            nativeClient: nativeClient,
+            activityAssertion: activityAssertion
+        )
+
+        _ = await startLiveMixer(controller)
+        controller.discardSharedMemory()
+
+        assertEqual(nativeClient.discardSharedMemoryCount, 1)
+        assertEqual(activityAssertion.beginCount, 1)
+        assertEqual(activityAssertion.endCount, 1)
+        assertEqual(activityAssertion.isActive, false)
+    }
+
+    @MainActor
+    func testLiveMixerControllerSynchronousTerminationStopClearsWithoutDiscardingSharedMemory() async {
+        let nativeClient = FakeAppLiveMixerNativeClient(startStatus: 0)
+        let activityAssertion = FakeLiveMixerActivityAssertion()
+        let controller = AppLiveMixerController(
+            nativeClient: nativeClient,
+            activityAssertion: activityAssertion
+        )
+
+        _ = await startLiveMixer(controller)
+        controller.stopSynchronouslyForTermination()
+
+        assertEqual(nativeClient.stopCount, 1)
+        assertEqual(nativeClient.discardSharedMemoryCount, 0)
+        assertEqual(activityAssertion.beginCount, 1)
+        assertEqual(activityAssertion.endCount, 1)
+        assertEqual(activityAssertion.isActive, false)
+    }
+
+    @MainActor
+    func testDiscardLiveMixerSharedMemoryStopsModelAndCallsController() {
+        let controller = FakeLiveMixerController()
+        let model = AppStatusModel(
+            prerequisiteChecker: FakePrerequisiteChecker(
+                snapshots: [
+                    PrerequisiteSnapshot(
+                        driverStatus: .installed,
+                        microphonePermission: .granted,
+                        selectedMicStatus: .available,
+                        quickTimeDeviceStatus: .visible
+                    ),
+                ]
+            ),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            microphoneSelectionStore: {
+                let store = InMemoryMicrophoneSelectionStore()
+                store.selectedMicrophoneID = "mic-1"
+                return store
+            }(),
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+        model.refreshPrerequisites()
+        model.liveMixerState = .running
+
+        model.discardLiveMixerSharedMemory()
+
+        assertEqual(controller.discardSharedMemoryCount, 1)
+        assertEqual(model.liveMixerState, LiveMixerState.stopped)
+    }
+
+    @MainActor
+    func testTerminateLiveMixerSynchronouslyStopsWithoutDiscardingSharedMemory() {
+        let controller = FakeLiveMixerController(automaticallyComplete: false)
+        let model = AppStatusModel(
+            prerequisiteChecker: FakePrerequisiteChecker(
+                snapshots: [
+                    PrerequisiteSnapshot(
+                        driverStatus: .installed,
+                        microphonePermission: .granted,
+                        selectedMicStatus: .available,
+                        quickTimeDeviceStatus: .visible
+                    ),
+                ]
+            ),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            microphoneSelectionStore: InMemoryMicrophoneSelectionStore(),
+            systemAudioAccessStore: InMemorySystemAudioAccessStore(hasVerifiedSystemAudioAccess: true)
+        )
+        model.refreshPrerequisites()
+        model.liveMixerState = .running
+
+        model.terminateLiveMixerSynchronously()
+
+        assertEqual(controller.stopSynchronouslyCount, 1)
+        assertEqual(controller.stopCount, 0)
+        assertEqual(controller.discardSharedMemoryCount, 0)
+        assertEqual(model.liveMixerState, LiveMixerState.stopped)
+    }
+
+    @MainActor
+    func testLiveMixerControllerFailedRestartEndsPreviousActivityAssertion() async {
+        let nativeClient = FakeAppLiveMixerNativeClient(startStatus: 0)
+        let activityAssertion = FakeLiveMixerActivityAssertion()
+        let controller = AppLiveMixerController(
+            nativeClient: nativeClient,
+            activityAssertion: activityAssertion
+        )
+
+        _ = await startLiveMixer(controller)
+        nativeClient.startStatus = -12
+        let result = await startLiveMixer(controller)
+
+        assertEqual(result, .failed(statusCode: -12))
+        assertEqual(nativeClient.startCount, 2)
+        assertEqual(activityAssertion.beginCount, 1)
+        assertEqual(activityAssertion.endCount, 1)
+        assertEqual(activityAssertion.isActive, false)
+    }
+
+    @MainActor
     func testDeniedMicrophoneAccessStillOffersRequestAction() async {
         let checker = FakePrerequisiteChecker(
             snapshots: [
@@ -1880,6 +2037,8 @@ private final class FakeLiveMixerController: LiveMixerControlling {
     private let automaticallyComplete: Bool
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private(set) var stopSynchronouslyCount = 0
+    private(set) var discardSharedMemoryCount = 0
     private(set) var setAudioLevelCount = 0
     private(set) var lastStartedMicrophoneID: String?
     private(set) var lastStartedConfiguration: LiveMixerStartConfiguration?
@@ -1923,6 +2082,16 @@ private final class FakeLiveMixerController: LiveMixerControlling {
         } else {
             stopCompletions.append(completion)
         }
+    }
+
+    @MainActor func stopSynchronouslyForTermination() {
+        stopSynchronouslyCount += 1
+        isRunning = false
+    }
+
+    @MainActor func discardSharedMemory() {
+        discardSharedMemoryCount += 1
+        isRunning = false
     }
 
     @MainActor func setAudioLevels(_ settings: AudioLevelSettings) {
@@ -2056,6 +2225,95 @@ private final class InMemorySystemAudioAccessStore: SystemAudioAccessStoring {
 
     init(hasVerifiedSystemAudioAccess: Bool = false) {
         self.hasVerifiedSystemAudioAccess = hasVerifiedSystemAudioAccess
+    }
+}
+
+@MainActor
+private func startLiveMixer(_ controller: AppLiveMixerController) async -> LiveMixerStartResult {
+    await withCheckedContinuation { continuation in
+        controller.start(
+            configuration: LiveMixerStartConfiguration(
+                microphoneID: nil,
+                captureMode: .globalSystemAudio,
+                selectedAppBundleIDs: []
+            )
+        ) { result in
+            continuation.resume(returning: result)
+        }
+    }
+}
+
+@MainActor
+private func stopLiveMixer(_ controller: AppLiveMixerController) async {
+    await withCheckedContinuation { continuation in
+        controller.stop {
+            continuation.resume()
+        }
+    }
+}
+
+private final class FakeAppLiveMixerNativeClient: AppLiveMixerNativeControlling, @unchecked Sendable {
+    var startStatus: Int32
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+    private(set) var discardSharedMemoryCount = 0
+
+    init(startStatus: Int32) {
+        self.startStatus = startStatus
+    }
+
+    func start(
+        microphoneID: String?,
+        captureMode: Int32,
+        selectedAppBundleIDs: String
+    ) -> Int32 {
+        startCount += 1
+        return startStatus
+    }
+
+    func stop() {
+        stopCount += 1
+    }
+
+    func discardSharedMemory() -> Int32 {
+        discardSharedMemoryCount += 1
+        return 0
+    }
+
+    func setAudioLevels(systemGain: Float, microphoneGain: Float) -> Int32 {
+        0
+    }
+
+    func setVoiceEnhancement(enabled: Bool) -> Int32 {
+        0
+    }
+
+    func copyHealthCounters(_ counters: UnsafeMutableBufferPointer<UInt64>) -> Int32 {
+        0
+    }
+
+    func copyLevels(outSystemPeak: UnsafeMutablePointer<Float>, outMicPeak: UnsafeMutablePointer<Float>) -> Int32 {
+        0
+    }
+
+    func supportsSelectedAppProcessRestore() -> Bool {
+        true
+    }
+}
+
+private final class FakeLiveMixerActivityAssertion: LiveMixerActivityAsserting, @unchecked Sendable {
+    private(set) var beginCount = 0
+    private(set) var endCount = 0
+    private(set) var isActive = false
+
+    func begin() {
+        beginCount += 1
+        isActive = true
+    }
+
+    func end() {
+        endCount += 1
+        isActive = false
     }
 }
 

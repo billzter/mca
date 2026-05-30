@@ -32,7 +32,10 @@ strip_quotes() {
 
 MAGIC="$(strip_integer_suffix "$(define_value MIXED_AUDIO_SHM_MAGIC)")"
 ABI_VERSION="$(strip_integer_suffix "$(define_value MIXED_AUDIO_ABI_VERSION)")"
+OUTPUT_SAMPLE_RATE="$(strip_integer_suffix "$(define_value MIXED_AUDIO_OUTPUT_SAMPLE_RATE)")"
+OUTPUT_CHANNEL_COUNT="$(strip_integer_suffix "$(define_value MIXED_AUDIO_OUTPUT_CHANNEL_COUNT)")"
 TARGET_FILL_FRAMES="$(strip_integer_suffix "$(define_value MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES)")"
+HEARTBEAT_STALE_NANOS="$(strip_integer_suffix "$(define_value MIXED_AUDIO_HEARTBEAT_STALE_NANOS)")"
 MARKER_LEFT="$(strip_float_suffix "$(define_value MIXED_AUDIO_PHASE2_MARKER_LEFT)")"
 MARKER_RIGHT="$(strip_float_suffix "$(define_value MIXED_AUDIO_PHASE2_MARKER_RIGHT)")"
 SHM_NAME="$(strip_quotes "$(define_value MIXED_AUDIO_SHM_NAME)")"
@@ -45,7 +48,10 @@ cat >"$TMP_PATH" <<EOF
 
 pub const MIXED_AUDIO_SHM_MAGIC: u32 = $MAGIC;
 pub const MIXED_AUDIO_SHM_VERSION: u32 = $ABI_VERSION;
+pub const MIXED_AUDIO_OUTPUT_SAMPLE_RATE: u32 = $OUTPUT_SAMPLE_RATE;
+pub const MIXED_AUDIO_OUTPUT_CHANNEL_COUNT: u32 = $OUTPUT_CHANNEL_COUNT;
 pub const MIXED_AUDIO_TARGET_SHARED_FILL_FRAMES: u32 = $TARGET_FILL_FRAMES;
+pub const MIXED_AUDIO_HEARTBEAT_STALE_NANOS: u64 = $HEARTBEAT_STALE_NANOS;
 pub const MIXED_AUDIO_PHASE2_MARKER_LEFT: f32 = $MARKER_LEFT;
 pub const MIXED_AUDIO_PHASE2_MARKER_RIGHT: f32 = $MARKER_RIGHT;
 pub const MIXED_AUDIO_SHM_NAME: &str = "$SHM_NAME";

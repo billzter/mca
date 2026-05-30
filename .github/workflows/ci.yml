@@ -20,6 +20,8 @@ jobs:
       - name: Verify Rust engine
         run: |
           Scripts/generate-rust-shared-memory-abi.sh --check
+          cargo fmt --check --manifest-path Rust/mixed-audio-engine/Cargo.toml
+          cargo clippy --manifest-path Rust/mixed-audio-engine/Cargo.toml -- -D warnings
           cargo test --manifest-path Rust/mixed-audio-engine/Cargo.toml
 
       - name: Verify Xcode tests

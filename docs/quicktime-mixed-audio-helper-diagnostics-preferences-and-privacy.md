@@ -31,6 +31,8 @@ V1 must follow these rules:
 
 The app may maintain short-lived in-memory buffers required for live capture, mixing, and HAL delivery. Those buffers are implementation state, not recordings.
 
+The POSIX shared-memory transport may leave a named object behind so a recorder that kept the virtual device open can resume after the app restarts. Producer shutdown clears the audio frame region and heartbeat before unmapping; the remaining header contains counters and synchronization state, not audio samples.
+
 ## Diagnostics Scope
 
 Diagnostics should help users and developers answer:
@@ -94,6 +96,10 @@ recent state transitions
 ```
 
 Allowed counters are metadata about transport health. They are not audio content.
+
+## Shared-Memory Permissions
+
+The v1 shared-memory object uses a local machine transport with broad read/write mode so the app producer and the HAL plug-in running inside Core Audio can both update synchronization indices. This is not a remote trust boundary: another local process with sufficient access could tamper with the transport, causing silence, corrupted audio, or misleading counters. The app and HAL therefore validate header magic, ABI version, format, capacity, generation, and heartbeat before trusting a mapping. Diagnostics should describe this as local transport state, not as protected storage.
 
 ## Disallowed Diagnostic Data
 

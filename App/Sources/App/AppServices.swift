@@ -4,6 +4,12 @@ import Combine
 import CoreAudio
 import SwiftUI
 
+enum AppTerminationSharedMemoryPolicy {
+    static func shouldDiscardSharedMemory() -> Bool {
+        false
+    }
+}
+
 @MainActor
 final class AppServices: ObservableObject {
     static let shared = AppServices()
@@ -85,6 +91,16 @@ final class AppServices: ObservableObject {
             sourceLevelMeterModel: sourceLevelMeterModel,
             sourceLevelMeterPollingController: sourceLevelMeterPollingController
         )
+    }
+
+    func applicationWillTerminate() {
+        healthPollingCancellable?.cancel()
+        healthPollingCancellable = nil
+        sourceLevelMeterPollingController.stop()
+        model.terminateLiveMixerSynchronously()
+        if AppTerminationSharedMemoryPolicy.shouldDiscardSharedMemory() {
+            model.discardLiveMixerSharedMemory()
+        }
     }
 
     private func startHealthPolling() {
@@ -600,9 +616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        Task { @MainActor in
-            AppServices.shared.model.stopLiveMixer()
-        }
+        AppServices.shared.applicationWillTerminate()
     }
 }
 

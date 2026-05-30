@@ -180,6 +180,8 @@ protocol LiveMixerControlling: AnyObject {
         completion: @MainActor @escaping (LiveMixerStartResult) -> Void
     )
     @MainActor func stop(completion: @MainActor @escaping () -> Void)
+    @MainActor func stopSynchronouslyForTermination()
+    @MainActor func discardSharedMemory()
     @MainActor func setAudioLevels(_ settings: AudioLevelSettings)
     @MainActor func currentHealthSnapshot() -> HealthSnapshot?
     @MainActor func currentSourceLevelSnapshot() -> SourceLevelMeterSnapshot?
