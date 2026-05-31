@@ -26,6 +26,11 @@
 		4BCA00000000000000000326 /* SetupView.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000226 /* SetupView.swift */; };
 		4BCA00000000000000000327 /* LiveMixerSession.m in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000227 /* LiveMixerSession.m */; };
 		4BCA00000000000000000328 /* SystemAudioAccessProbe.m in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000228 /* SystemAudioAccessProbe.m */; };
+		4BCA00000000000000000329 /* DetachedUninstallRequest.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000232 /* DetachedUninstallRequest.swift */; };
+		4BCA0000000000000000032A /* DetachedUninstallerLauncher.swift in App Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000233 /* DetachedUninstallerLauncher.swift */; };
+		4BCA0000000000000000032B /* MixedCaptureAudioUninstaller.app in App Helpers */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000201 /* MixedCaptureAudioUninstaller.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		4BCA0000000000000000032C /* DetachedUninstallRequest.swift in Uninstaller Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000232 /* DetachedUninstallRequest.swift */; };
+		4BCA0000000000000000032D /* MixedCaptureAudioUninstallerApp.swift in Uninstaller Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000240 /* MixedCaptureAudioUninstallerApp.swift */; };
 		4BCA00000000000000000111 /* AppCommandMenuXCTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000101 /* AppCommandMenuXCTests.swift */; };
 		4BCA00000000000000000112 /* AppMicrophoneSelectionStoreTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000103 /* AppMicrophoneSelectionStoreTests.swift */; };
 		4BCA00000000000000000113 /* AppStatusModelTests.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = 4BCA00000000000000000104 /* AppStatusModelTests.swift */; };
@@ -48,6 +53,13 @@
 			remoteGlobalIDString = 4BCA00000000000000000060;
 			remoteInfo = MixedCaptureAudioApp;
 		};
+		4BCA00000000000000000152 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 4BCA00000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4BCA00000000000000000070;
+			remoteInfo = MixedCaptureAudioUninstaller;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
@@ -61,6 +73,7 @@
 		4BCA00000000000000000108 /* SetupPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/SetupPresentationTests.swift; sourceTree = "<group>"; };
 		4BCA00000000000000000109 /* SourceLevelMeterModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/SourceLevelMeterModelTests.swift; sourceTree = "<group>"; };
 		4BCA0000000000000000010A /* SourceLevelMeterPollingControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTests/MixedCaptureAudioTests/SourceLevelMeterPollingControllerTests.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000201 /* MixedCaptureAudioUninstaller.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MixedCaptureAudioUninstaller.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4BCA00000000000000000200 /* MixedCaptureAudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MixedCaptureAudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4BCA00000000000000000210 /* HealthDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/Diagnostics/HealthDiagnostics.swift; sourceTree = "<group>"; };
 		4BCA00000000000000000211 /* PrerequisiteStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/PrerequisiteStatus.swift; sourceTree = "<group>"; };
@@ -84,6 +97,10 @@
 		4BCA00000000000000000229 /* LiveMixerABI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = App/Sources/Audio/LiveMixerABI.h; sourceTree = "<group>"; };
 		4BCA00000000000000000230 /* App Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = App/Resources/Info.plist; sourceTree = "<group>"; };
 		4BCA00000000000000000231 /* MixedCaptureAudio.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = App/MixedCaptureAudio.entitlements; sourceTree = "<group>"; };
+		4BCA00000000000000000232 /* DetachedUninstallRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/Shared/DetachedUninstallRequest.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000233 /* DetachedUninstallerLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/App/DetachedUninstallerLauncher.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000240 /* MixedCaptureAudioUninstallerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App/Sources/Uninstaller/MixedCaptureAudioUninstallerApp.swift; sourceTree = "<group>"; };
+		4BCA00000000000000000241 /* Uninstaller Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = App/Resources/UninstallerInfo.plist; sourceTree = "<group>"; };
 		4BCA00000000000000000500 /* MixedCaptureAudio.driver */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MixedCaptureAudio.driver; sourceTree = BUILT_PRODUCTS_DIR; };
 		4BCA00000000000000000520 /* MixedCaptureAudioDriver.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = HALPlugin/Sources/MixedCaptureAudioDriver.c; sourceTree = "<group>"; };
 		4BCA00000000000000000521 /* MixedAudioSharedMemoryReader.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = HALPlugin/Sources/MixedAudioSharedMemoryReader.c; sourceTree = "<group>"; };
@@ -101,7 +118,24 @@
 		4BCA00000000000000000605 /* Tests.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = BuildConfig/Tests.xcconfig; sourceTree = "<group>"; };
 		4BCA00000000000000000606 /* Driver-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "BuildConfig/Driver-Debug.xcconfig"; sourceTree = "<group>"; };
 		4BCA00000000000000000607 /* Driver-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "BuildConfig/Driver-Release.xcconfig"; sourceTree = "<group>"; };
+		4BCA00000000000000000608 /* Uninstaller.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = BuildConfig/Uninstaller.xcconfig; sourceTree = "<group>"; };
+		4BCA00000000000000000609 /* Uninstaller-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "BuildConfig/Uninstaller-Debug.xcconfig"; sourceTree = "<group>"; };
+		4BCA0000000000000000060A /* Uninstaller-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "BuildConfig/Uninstaller-Release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		4BCA00000000000000000405 /* Embed Helper Apps */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Helpers;
+			dstSubfolderSpec = 1;
+			files = (
+				4BCA0000000000000000032B /* MixedCaptureAudioUninstaller.app in App Helpers */,
+			);
+			name = "Embed Helper Apps";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		4BCA00000000000000000402 /* App Frameworks */ = {
@@ -112,6 +146,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		4BCA00000000000000000121 /* Test Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4BCA00000000000000000422 /* Uninstaller Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -132,6 +173,7 @@
 			isa = PBXGroup;
 			children = (
 				4BCA00000000000000000200 /* MixedCaptureAudio.app */,
+				4BCA00000000000000000201 /* MixedCaptureAudioUninstaller.app */,
 				4BCA00000000000000000102 /* MixedCaptureAudioTests.xctest */,
 				4BCA00000000000000000500 /* MixedCaptureAudio.driver */,
 				4BCA00000000000000000210 /* HealthDiagnostics.swift */,
@@ -156,6 +198,10 @@
 				4BCA00000000000000000229 /* LiveMixerABI.h */,
 				4BCA00000000000000000230 /* App Info.plist */,
 				4BCA00000000000000000231 /* MixedCaptureAudio.entitlements */,
+				4BCA00000000000000000232 /* DetachedUninstallRequest.swift */,
+				4BCA00000000000000000233 /* DetachedUninstallerLauncher.swift */,
+				4BCA00000000000000000240 /* MixedCaptureAudioUninstallerApp.swift */,
+				4BCA00000000000000000241 /* Uninstaller Info.plist */,
 				4BCA00000000000000000101 /* AppCommandMenuXCTests.swift */,
 				4BCA00000000000000000103 /* AppMicrophoneSelectionStoreTests.swift */,
 				4BCA00000000000000000104 /* AppStatusModelTests.swift */,
@@ -180,6 +226,9 @@
 				4BCA00000000000000000604 /* Driver.xcconfig */,
 				4BCA00000000000000000606 /* Driver-Debug.xcconfig */,
 				4BCA00000000000000000607 /* Driver-Release.xcconfig */,
+				4BCA00000000000000000608 /* Uninstaller.xcconfig */,
+				4BCA00000000000000000609 /* Uninstaller-Debug.xcconfig */,
+				4BCA0000000000000000060A /* Uninstaller-Release.xcconfig */,
 				4BCA00000000000000000605 /* Tests.xcconfig */,
 			);
 			sourceTree = "<group>";
@@ -212,14 +261,33 @@
 				4BCA00000000000000000401 /* App Sources */,
 				4BCA00000000000000000402 /* App Frameworks */,
 				4BCA00000000000000000403 /* App Resources */,
+				4BCA00000000000000000405 /* Embed Helper Apps */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4BCA00000000000000000153 /* PBXTargetDependency */,
+			);
+			name = MixedCaptureAudioApp;
+			productName = MixedCaptureAudio;
+			productReference = 4BCA00000000000000000200 /* MixedCaptureAudio.app */;
+			productType = "com.apple.product-type.application";
+		};
+		4BCA00000000000000000070 /* MixedCaptureAudioUninstaller */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4BCA00000000000000000090 /* Build configuration list for PBXNativeTarget "MixedCaptureAudioUninstaller" */;
+			buildPhases = (
+				4BCA00000000000000000421 /* Uninstaller Sources */,
+				4BCA00000000000000000422 /* Uninstaller Frameworks */,
+				4BCA00000000000000000423 /* Uninstaller Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = MixedCaptureAudioApp;
-			productName = MixedCaptureAudio;
-			productReference = 4BCA00000000000000000200 /* MixedCaptureAudio.app */;
+			name = MixedCaptureAudioUninstaller;
+			productName = MixedCaptureAudioUninstaller;
+			productReference = 4BCA00000000000000000201 /* MixedCaptureAudioUninstaller.app */;
 			productType = "com.apple.product-type.application";
 		};
 		4BCA00000000000000000130 /* MixedCaptureAudioTests */ = {
@@ -262,6 +330,7 @@
 			targets = (
 				4BCA00000000000000000010 /* MixedCaptureAudioDriver */,
 				4BCA00000000000000000060 /* MixedCaptureAudioApp */,
+				4BCA00000000000000000070 /* MixedCaptureAudioUninstaller */,
 				4BCA00000000000000000130 /* MixedCaptureAudioTests */,
 			);
 		};
@@ -276,6 +345,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		4BCA00000000000000000503 /* Driver Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4BCA00000000000000000423 /* Uninstaller Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -318,6 +394,17 @@
 				4BCA00000000000000000326 /* SetupView.swift in App Sources */,
 				4BCA00000000000000000327 /* LiveMixerSession.m in App Sources */,
 				4BCA00000000000000000328 /* SystemAudioAccessProbe.m in App Sources */,
+				4BCA00000000000000000329 /* DetachedUninstallRequest.swift in App Sources */,
+				4BCA0000000000000000032A /* DetachedUninstallerLauncher.swift in App Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4BCA00000000000000000421 /* Uninstaller Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4BCA0000000000000000032C /* DetachedUninstallRequest.swift in Uninstaller Sources */,
+				4BCA0000000000000000032D /* MixedCaptureAudioUninstallerApp.swift in Uninstaller Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -344,6 +431,11 @@
 			isa = PBXTargetDependency;
 			target = 4BCA00000000000000000060 /* MixedCaptureAudioApp */;
 			targetProxy = 4BCA00000000000000000150 /* PBXContainerItemProxy */;
+		};
+		4BCA00000000000000000153 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4BCA00000000000000000070 /* MixedCaptureAudioUninstaller */;
+			targetProxy = 4BCA00000000000000000152 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -419,6 +511,20 @@
 			};
 			name = Release;
 		};
+		4BCA00000000000000000091 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA00000000000000000609 /* Uninstaller-Debug.xcconfig */;
+			buildSettings = {
+			};
+			name = Debug;
+		};
+		4BCA00000000000000000092 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 4BCA0000000000000000060A /* Uninstaller-Release.xcconfig */;
+			buildSettings = {
+			};
+			name = Release;
+		};
 		4BCA00000000000000000141 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 4BCA00000000000000000605 /* Tests.xcconfig */;
@@ -459,6 +565,15 @@
 			buildConfigurations = (
 				4BCA00000000000000000081 /* Debug */,
 				4BCA00000000000000000082 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4BCA00000000000000000090 /* Build configuration list for PBXNativeTarget "MixedCaptureAudioUninstaller" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4BCA00000000000000000091 /* Debug */,
+				4BCA00000000000000000092 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

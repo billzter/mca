@@ -52,7 +52,7 @@ For the deeper architecture map, see [docs/mixed-capture-audio-project-reference
 6. Choose `All Apps` or `Selected Apps` for program audio.
 7. In QuickTime Player or Screenshot, select `Mixed Capture Audio` as the audio input.
 
-The helper is an `LSUIElement` menu-bar app. Closing the setup window leaves the helper running; use the menu-bar `Quit` action to stop it.
+MixedCaptureAudio itself is an `LSUIElement` menu-bar app. Closing the setup window leaves it running; use the menu-bar `Quit` action to stop it.
 
 ## Development
 
@@ -100,11 +100,26 @@ If `Mixed Capture Audio` is not visible in a recorder, quit and reopen the recor
 
 If system audio is not detected, make sure something audible and unmuted is playing, then run `Check System Audio` again.
 
-To uninstall while preserving macOS privacy decisions:
+To uninstall while preserving macOS privacy decisions, open Setup and use the Advanced uninstall action.
 
-```sh
-Scripts/manage-installation.sh uninstall
-```
+The app then:
+
+1. Stops the live session.
+2. Disables launch at login.
+3. Removes app-owned state.
+4. Copies its bundled uninstaller helper.
+5. Starts the copied helper through an async LaunchServices handoff.
+6. Quits so the app bundle can be moved to Trash.
+
+The Finish Uninstalling helper:
+
+- Uses the Dock-app bundle identity `com.minamiktr.mca.uninstall` and display name `Finish Uninstalling MCA` so its window can be recovered after focus changes.
+- Shows the HAL driver first, because it can be moved while the main app is quitting.
+- Keeps the app row unavailable until the main app has exited; if the app does not exit promptly, the row tells the user to quit it manually and click `Check Again`.
+- Reveals each remaining item in Finder so the user can move it to Trash. Finder owns any administrator password prompt.
+- Minimizes instead of closing while uninstall is incomplete.
+- Confirms Quit/Command-Q while uninstall is incomplete, defaults to continuing uninstall, and honors `Quit Anyway`.
+- Shows next-step guidance while removal is in progress, then final restart guidance as native bullet rows after both installed items are gone.
 
 To reset local app preferences:
 

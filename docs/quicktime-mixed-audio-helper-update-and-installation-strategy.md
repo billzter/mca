@@ -273,21 +273,33 @@ The installer should not:
 
 ## Uninstall Strategy
 
-V1 should provide an explicit uninstall path.
+V1 provides an explicit in-app uninstall path from the Setup window's Advanced section. The status menu should keep setup and quit actions only; destructive uninstall actions belong in Setup where the app can explain scope and recovery.
 
-Uninstall should remove:
+The uninstall flow should:
 
-```text
-/Applications/MixedCaptureAudio.app
-/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver
-```
+- Stop the live mixer and discard `/mca.mix.v1` so the HAL driver reads silence instead of stale frames.
+- Disable the login item.
+- Remove app-owned preferences, support files, caches, diagnostics, and temporary lock files.
+- Leave setup recovery available if app-owned state removal fails.
+- Copy the bundled uninstaller helper from `MixedCaptureAudio.app/Contents/Helpers/MixedCaptureAudioUninstaller.app` into a unique per-user temporary directory.
+- Start the copied `.app` through an async LaunchServices handoff with a manifest, then quit the main app.
+- Open a helper-owned Finish Uninstalling window for privileged installed artifacts.
+- Run the helper as a temporary regular Dock app under bundle identifier `com.minamiktr.mca.uninstall`.
+- Provide native Quit and Window menu commands.
+- Wait for the parent app process before enabling the app row.
+- Surface a wrapping manual-quit backstop after a bounded wait.
+- Prevent Close from terminating the helper while work remains.
+- Confirm incomplete Quit/Command-Q before honoring an explicit quit.
+- Show `/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver` before `/Applications/MixedCaptureAudio.app`, because the driver can be moved while the main app is still finishing shutdown.
+- Keep the app-bundle row unavailable until the manifest's parent process identifier no longer exists.
+- Reveal the real installed items in Finder from that window so the user moves them to Trash.
+- Let Finder/macOS own administrator authorization prompts for those privileged moves.
+- Provide `Check Again` in the finish window.
+- Show next-step guidance while removal is in progress.
+- Replace next-step guidance with final completion guidance when both installed artifacts are gone.
+- Include restart guidance when the driver was present, because Core Audio may keep the removed HAL bundle loaded until restart.
 
-Optional uninstall choices:
-
-- Keep preferences and diagnostics.
-- Remove preferences and diagnostics.
-
-Uninstall should not reset microphone/system-audio permissions automatically. Provide manual instructions if the user wants to remove TCC entries.
+Uninstall should not reset microphone/system-audio privacy decisions automatically. Provide manual instructions if the user wants to remove TCC entries.
 
 Preferences and diagnostics storage policy is documented in `/tmp/quicktime-mixed-audio-helper-diagnostics-preferences-and-privacy.md`.
 

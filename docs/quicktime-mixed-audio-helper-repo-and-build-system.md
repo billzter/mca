@@ -159,6 +159,32 @@ Responsibilities:
 - Own app Info.plist and entitlements.
 - Link AppKit, SwiftUI, AVFoundation, CoreAudio, AudioToolbox, ServiceManagement, and Foundation.
 - Invoke the Rust boundary build phase and link `Generated/lib/<profile>/libmixed_audio_engine.a`.
+- Build and embed `MixedCaptureAudioUninstaller.app` under `Contents/Helpers`.
+
+### `MixedCaptureAudioUninstaller.app`
+
+Native Xcode macOS application target embedded in the main app at:
+
+```text
+MixedCaptureAudio.app/Contents/Helpers/MixedCaptureAudioUninstaller.app
+```
+
+Responsibilities:
+
+- Read a JSON uninstall manifest passed with `--request`.
+- Show the helper-owned Finish Uninstalling window after the main app quits.
+- Run as a temporary regular Dock app under bundle identifier `com.minamiktr.mca.uninstall` with display name `Finish Uninstalling MCA` so the window remains recoverable after focus changes.
+- Provide native Quit and Window menu commands.
+- Show the HAL driver before the app bundle.
+- Keep the app-bundle row unavailable while the manifest's parent process identifier still exists.
+- Surface a bounded, wrapping manual-quit backstop if the parent app process does not exit promptly.
+- Reveal the real installed HAL driver and app bundle in Finder for user-owned Trash moves.
+- Keep Close from terminating the helper while uninstall work remains, and confirm incomplete Quit/Command-Q before honoring an explicit quit.
+- Show next-step guidance while removal is in progress.
+- Check whether both installed artifacts are gone and show native bullet-row final restart guidance.
+- Best-effort remove old temporary helper copies.
+
+The main app must copy this signed helper to a unique per-user temporary directory and start the copied `.app` through an async LaunchServices handoff during uninstall. Do not modify the installed app bundle during uninstall.
 
 ### `RustAudioEngine`
 
@@ -350,8 +376,19 @@ Installer responsibilities:
 
 Uninstaller responsibilities:
 
-- Remove `/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver`.
-- Remove app-owned support files if requested.
+- Remove app-owned preferences, support files, caches, diagnostics, and temporary lock files during explicit in-app uninstall.
+- Start a copied uninstaller helper through an async LaunchServices handoff so the main app can quit before the app bundle is moved to Trash.
+- Open a focused, Dock-recoverable Finish Uninstalling window under the helper bundle identifier `com.minamiktr.mca.uninstall`.
+- Show the HAL driver first.
+- Wait for the main app process to exit before enabling the app bundle row.
+- Provide native Quit and Window menu commands.
+- Keep Close from terminating the helper while work remains.
+- Confirm incomplete Quit/Command-Q before honoring an explicit quit.
+- Surface a wrapping manual-quit backstop after a bounded wait.
+- Show next-step guidance while removal is in progress.
+- Reveal the real app bundle and HAL driver in Finder.
+- Let Finder/macOS handle administrator authorization while the user moves `/Applications/MixedCaptureAudio.app` and `/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver` to Trash.
+- Preserve microphone and system-audio privacy choices.
 - Leave unrelated HAL plug-ins untouched.
 
 ## HAL Bundle Notes
@@ -443,7 +480,11 @@ Behavior:
 - `install-driver [driver-path]` requires administrator privileges, copies the bundle, preserves signing, and prints reload/restart instructions.
 - `uninstall-driver` removes only this project’s driver bundle.
 - `reload-coreaudio` restarts Core Audio driver hosts for local development.
-- `uninstall` removes the installed app and driver while preserving preferences and privacy permission records.
+- `uninstall` is a developer cleanup command for local installed artifacts:
+  - Refuses to continue while `MixedCaptureAudio` is still running.
+  - Removes the HAL driver first.
+  - Removes the app bundle second.
+  - Leaves product uninstall to Setup > Advanced, which also removes app-owned state while preserving privacy permission records.
 
 ### `Scripts/build-package.sh`
 
@@ -455,18 +496,18 @@ Inputs:
 
 Output:
 
-- Package installer containing the app and HAL driver.
+- Package installer containing the app, embedded uninstaller helper, and HAL driver.
 
 Behavior:
 
-- Build a package payload that installs this project’s app and HAL driver.
+- Build a package payload that installs this project’s app, embedded uninstaller helper, and HAL driver.
 - Starting with version `0.2.x`, release `.pkg` installers support universal macOS architecture.
 - Use Xcode's generic macOS destination for Release package builds so Xcode emits universal native products instead of a host-specific `My Mac` build.
 - Keep non-Release package builds host-architecture focused unless `XCODE_DESTINATION` is explicitly set.
-- Reject Release package builds unless the app executable, HAL driver executable, generated Rust static library, and packaged payload executables contain both `arm64` and `x86_64` slices.
+- Reject Release package builds unless the app executable, uninstaller helper executable, HAL driver executable, generated Rust static library, and packaged payload executables contain both `arm64` and `x86_64` slices.
 - Set owner/group/permissions appropriate for `/Library/Audio/Plug-Ins/HAL`.
 - Reject relocatable bundle metadata.
-- With `--sign`, import Developer ID signing identities into a temporary keychain, sign the app, HAL driver, and package, then restore keychain state on exit.
+- With `--sign`, import Developer ID signing identities into a temporary keychain, sign the helper, app, HAL driver, and package, then restore keychain state on exit.
 - With `--notarize`, submit the signed package through `notarytool`, staple, and validate the accepted package.
 
 ## CI Expectations

@@ -1779,6 +1779,17 @@ final class AppStatusModelTests: XCTestCase {
     }
 
     @MainActor
+    func testStatusMenuActionsDoNotIncludeUninstall() async {
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio)
+        )
+
+        XCTAssertFalse(model.statusMenuActions.map(\.title).contains("Uninstall MixedCaptureAudio..."))
+    }
+
+    @MainActor
     func testStatusItemUsesVariableLengthWithFixedIconSize() {
         XCTAssertEqual(StatusItemLayout.length, NSStatusItem.variableLength)
     }
@@ -2062,6 +2073,540 @@ final class AppStatusModelTests: XCTestCase {
         assertEqual(model.launchAtStartupStatus, .failed)
         assertEqual(model.launchAtStartupErrorMessage, "Login item registration failed")
     }
+
+    @MainActor
+    func testUninstallFlowDiscardsSharedMemoryBeforeLoginUserStateAndDetachedHelperHandoff() async {
+        let controller = FakeLiveMixerController()
+        let launchController = FakeLaunchAtStartupController(status: .enabled)
+        let uninstallService = FakeAppUninstallService()
+        let manualWindowPresenter = FakeManualUninstallWindowPresenter()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: controller,
+            launchAtStartupController: launchController,
+            uninstallService: uninstallService,
+            manualUninstallWindowPresenter: manualWindowPresenter
+        )
+        model.refreshPrerequisites()
+        model.liveMixerState = .running
+
+        await model.performUninstall()
+
+        XCTAssertEqual(controller.discardSharedMemoryCount, 1)
+        XCTAssertEqual(launchController.lastSetEnabled, false)
+        XCTAssertEqual(uninstallService.events, [
+            .removeUserState,
+            .launchDetachedUninstaller(
+                status: ManualUninstallStatus(appInstalled: true, driverInstalled: true),
+                requiresRestart: true
+            ),
+            .quitApp,
+        ])
+        XCTAssertFalse(manualWindowPresenter.events.contains {
+            if case .show = $0 {
+                return true
+            }
+            return false
+        })
+        XCTAssertEqual(
+            model.uninstallState,
+            .handedOffToDetachedUninstaller(requiresRestart: true)
+        )
+        XCTAssertTrue(model.isUninstalling)
+    }
+
+    @MainActor
+    func testUninstallFlowLaunchesDetachedHelperWhenOnlyAppRemains() async {
+        let uninstallService = FakeAppUninstallService()
+        uninstallService.driverInstalled = false
+        let manualWindowPresenter = FakeManualUninstallWindowPresenter()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: FakeLiveMixerController(),
+            launchAtStartupController: FakeLaunchAtStartupController(status: .disabled),
+            uninstallService: uninstallService,
+            manualUninstallWindowPresenter: manualWindowPresenter
+        )
+
+        await model.performUninstall()
+
+        XCTAssertEqual(uninstallService.events, [
+            .removeUserState,
+            .launchDetachedUninstaller(
+                status: ManualUninstallStatus(appInstalled: true, driverInstalled: false),
+                requiresRestart: false
+            ),
+            .quitApp,
+        ])
+        XCTAssertFalse(manualWindowPresenter.events.contains {
+            if case .show = $0 {
+                return true
+            }
+            return false
+        })
+        XCTAssertEqual(model.uninstallState, .handedOffToDetachedUninstaller(requiresRestart: false))
+        XCTAssertTrue(model.uninstallGuidance.contains("helper window"))
+        XCTAssertFalse(model.uninstallGuidance.contains("Uninstall completed"))
+        XCTAssertFalse(model.uninstallGuidance.contains("Restart your Mac"))
+    }
+
+    @MainActor
+    func testUninstallFlowFallsBackToManualWindowWhenDetachedHelperFails() async {
+        let uninstallService = FakeAppUninstallService()
+        uninstallService.detachedUninstallerLaunchResult = .failed("Could not launch helper")
+        let manualWindowPresenter = FakeManualUninstallWindowPresenter()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: FakeLiveMixerController(),
+            launchAtStartupController: FakeLaunchAtStartupController(status: .disabled),
+            uninstallService: uninstallService,
+            manualUninstallWindowPresenter: manualWindowPresenter
+        )
+
+        await model.performUninstall()
+
+        XCTAssertEqual(uninstallService.events, [
+            .removeUserState,
+            .launchDetachedUninstaller(
+                status: ManualUninstallStatus(appInstalled: true, driverInstalled: true),
+                requiresRestart: true
+            ),
+        ])
+        XCTAssertEqual(manualWindowPresenter.events, [
+            .show(status: ManualUninstallStatus(appInstalled: true, driverInstalled: true))
+        ])
+        XCTAssertEqual(
+            model.uninstallState,
+            .manualRemovalRequired(
+                status: ManualUninstallStatus(appInstalled: true, driverInstalled: true),
+                requiresRestart: true
+            )
+        )
+    }
+
+    @MainActor
+    func testFailedUninstallDoesNotBlockNormalSetupRecovery() async {
+        let uninstallService = FakeAppUninstallService()
+        uninstallService.userStateRemovalResult = .failed("Could not remove support files")
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: FakeLiveMixerController(),
+            launchAtStartupController: FakeLaunchAtStartupController(status: .disabled),
+            uninstallService: uninstallService,
+            manualUninstallWindowPresenter: FakeManualUninstallWindowPresenter()
+        )
+
+        await model.performUninstall()
+
+        XCTAssertEqual(model.uninstallState, .failed("Could not remove support files"))
+        XCTAssertFalse(model.isUninstalling)
+        XCTAssertTrue(model.canStartUninstall)
+
+        model.refreshPrerequisites()
+
+        XCTAssertEqual(model.sessionState, .ready)
+    }
+
+    @MainActor
+    func testManualUninstallCheckCompletesAfterAppAndDriverAreGone() async {
+        let uninstallService = FakeAppUninstallService()
+        uninstallService.detachedUninstallerLaunchResult = .failed("Could not launch helper")
+        let manualWindowPresenter = FakeManualUninstallWindowPresenter()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: FakeLiveMixerController(),
+            launchAtStartupController: FakeLaunchAtStartupController(status: .disabled),
+            uninstallService: uninstallService,
+            manualUninstallWindowPresenter: manualWindowPresenter
+        )
+
+        await model.performUninstall()
+        uninstallService.appInstalled = false
+        uninstallService.driverInstalled = false
+        await model.checkManualUninstallRemoval()
+
+        XCTAssertEqual(uninstallService.events, [
+            .removeUserState,
+            .launchDetachedUninstaller(
+                status: ManualUninstallStatus(appInstalled: true, driverInstalled: true),
+                requiresRestart: true
+            ),
+            .presentCompletion(requiresRestart: true),
+            .quitApp,
+        ])
+        XCTAssertEqual(manualWindowPresenter.events, [
+            .show(status: ManualUninstallStatus(appInstalled: true, driverInstalled: true)),
+            .close,
+        ])
+        XCTAssertEqual(model.uninstallState, .completed(requiresRestart: true))
+    }
+
+    @MainActor
+    func testManualUninstallCheckKeepsWindowOpenWhileAppRemains() async {
+        let uninstallService = FakeAppUninstallService()
+        uninstallService.detachedUninstallerLaunchResult = .failed("Could not launch helper")
+        let manualWindowPresenter = FakeManualUninstallWindowPresenter()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: FakeLiveMixerController(),
+            launchAtStartupController: FakeLaunchAtStartupController(status: .disabled),
+            uninstallService: uninstallService,
+            manualUninstallWindowPresenter: manualWindowPresenter
+        )
+        await model.performUninstall()
+
+        uninstallService.driverInstalled = false
+        await model.checkManualUninstallRemoval()
+
+        XCTAssertEqual(manualWindowPresenter.events, [
+            .show(status: ManualUninstallStatus(appInstalled: true, driverInstalled: true)),
+            .show(status: ManualUninstallStatus(appInstalled: true, driverInstalled: false)),
+        ])
+        XCTAssertEqual(
+            model.uninstallState,
+            .manualRemovalRequired(
+                status: ManualUninstallStatus(appInstalled: true, driverInstalled: false),
+                requiresRestart: true
+            )
+        )
+    }
+
+    @MainActor
+    func testUninstallAgainWhileManualWindowIsOpenChecksRemainingItems() async {
+        let uninstallService = FakeAppUninstallService()
+        uninstallService.detachedUninstallerLaunchResult = .failed("Could not launch helper")
+        let manualWindowPresenter = FakeManualUninstallWindowPresenter()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: FakeLiveMixerController(),
+            launchAtStartupController: FakeLaunchAtStartupController(status: .disabled),
+            uninstallService: uninstallService,
+            manualUninstallWindowPresenter: manualWindowPresenter
+        )
+        await model.performUninstall()
+
+        uninstallService.appInstalled = false
+        uninstallService.driverInstalled = false
+        await model.performUninstall()
+
+        XCTAssertEqual(uninstallService.events, [
+            .removeUserState,
+            .launchDetachedUninstaller(
+                status: ManualUninstallStatus(appInstalled: true, driverInstalled: true),
+                requiresRestart: true
+            ),
+            .presentCompletion(requiresRestart: true),
+            .quitApp,
+        ])
+        XCTAssertEqual(model.uninstallState, .completed(requiresRestart: true))
+    }
+
+    @MainActor
+    func testManualUninstallRevealActionsOpenRealItemsInFinder() async {
+        let uninstallService = FakeAppUninstallService()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            liveMixerController: FakeLiveMixerController(),
+            launchAtStartupController: FakeLaunchAtStartupController(status: .disabled),
+            uninstallService: uninstallService,
+            manualUninstallWindowPresenter: FakeManualUninstallWindowPresenter()
+        )
+
+        model.revealAppForManualRemoval()
+        model.revealDriverForManualRemoval()
+
+        XCTAssertEqual(uninstallService.events, [.revealApp, .revealDriver])
+    }
+
+    @MainActor
+    func testUninstallingSuppressesPreferenceWritesAfterUserStateRemoval() async {
+        let audioLevelStore = CountingAudioLevelSettingsStore()
+        let model = AppStatusModel(
+            prerequisiteChecker: readyChecker(),
+            microphonePermissionRequester: FakeMicrophonePermissionRequester(granted: true),
+            systemAudioAccessTester: FakeSystemAudioAccessTester(outcome: .receivingAudio),
+            audioLevelSettingsStore: audioLevelStore,
+            launchAtStartupController: FakeLaunchAtStartupController(status: .disabled),
+            uninstallService: FakeAppUninstallService()
+        )
+
+        await model.performUninstall()
+        model.setSystemAudioLevelDecibels(3.0)
+
+        XCTAssertEqual(audioLevelStore.setCount, 0)
+        XCTAssertEqual(model.audioLevelSettings.systemDecibels, AudioLevelSettings.defaultSystemDecibels)
+    }
+
+    @MainActor
+    func testAppUninstallServiceRemovesInjectedUserStateURLsAndPreferences() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "mca-uninstall-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let supportURL = root.appendingPathComponent("Support", isDirectory: true)
+        let cacheURL = root.appendingPathComponent("Cache", isDirectory: true)
+        let preferencesDomain = "com.minamiktr.mca.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: preferencesDomain))
+        defer {
+            try? fileManager.removeItem(at: root)
+            defaults.removePersistentDomain(forName: preferencesDomain)
+        }
+        try fileManager.createDirectory(at: supportURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: cacheURL, withIntermediateDirectories: true)
+        defaults.set("saved", forKey: "setting")
+
+        let service = AppUninstallService(
+            fileManager: fileManager,
+            userDefaults: defaults,
+            preferencesDomain: preferencesDomain,
+            driverURL: root.appendingPathComponent("MixedCaptureAudio.driver"),
+            appBundleURL: root.appendingPathComponent("MixedCaptureAudio.app"),
+            userOwnedRemovalURLs: [supportURL, cacheURL]
+        )
+
+        XCTAssertEqual(service.removeUserState(), .success)
+
+        XCTAssertFalse(fileManager.fileExists(atPath: supportURL.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: cacheURL.path))
+        XCTAssertNil(defaults.object(forKey: "setting"))
+    }
+
+    @MainActor
+    func testAppUninstallServiceUsesInjectedDriverAppAndFinderActions() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "mca-uninstall-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let driverURL = root.appendingPathComponent("MixedCaptureAudio.driver", isDirectory: true)
+        let appBundleURL = root.appendingPathComponent("MixedCaptureAudio.app", isDirectory: true)
+        try fileManager.createDirectory(at: driverURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: appBundleURL, withIntermediateDirectories: true)
+        defer {
+            try? fileManager.removeItem(at: root)
+        }
+        var revealedURLs: [URL] = []
+        let service = AppUninstallService(
+            fileManager: fileManager,
+            driverURL: driverURL,
+            appBundleURL: appBundleURL,
+            userOwnedRemovalURLs: [],
+            revealURLsInFinder: { urls in
+                revealedURLs = urls
+            }
+        )
+
+        XCTAssertTrue(service.isAppInstalled())
+        XCTAssertTrue(service.isDriverInstalled())
+        service.revealAppInFinder()
+        XCTAssertEqual(revealedURLs, [appBundleURL])
+        service.revealDriverInFinder()
+
+        XCTAssertEqual(revealedURLs, [driverURL])
+    }
+
+    @MainActor
+    func testAppUninstallServiceReportsMissingInstalledArtifacts() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "mca-uninstall-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer {
+            try? fileManager.removeItem(at: root)
+        }
+        let service = AppUninstallService(
+            fileManager: fileManager,
+            driverURL: root.appendingPathComponent("MixedCaptureAudio.driver", isDirectory: true),
+            appBundleURL: root.appendingPathComponent("MixedCaptureAudio.app", isDirectory: true),
+            userOwnedRemovalURLs: []
+        )
+
+        XCTAssertFalse(service.isAppInstalled())
+        XCTAssertFalse(service.isDriverInstalled())
+    }
+
+    @MainActor
+    func testAppUninstallServiceLaunchesDetachedHelperWithInstalledArtifactPaths() async throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "mca-uninstall-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer {
+            try? fileManager.removeItem(at: root)
+        }
+        let driverURL = root.appendingPathComponent("MixedCaptureAudio.driver", isDirectory: true)
+        let appBundleURL = root.appendingPathComponent("MixedCaptureAudio.app", isDirectory: true)
+        let launcher = FakeDetachedUninstallerLauncher()
+        let service = AppUninstallService(
+            fileManager: fileManager,
+            driverURL: driverURL,
+            appBundleURL: appBundleURL,
+            userOwnedRemovalURLs: [],
+            detachedUninstallerLauncher: launcher
+        )
+
+        let launchResult = await service.launchDetachedUninstaller(
+            status: ManualUninstallStatus(appInstalled: true, driverInstalled: false),
+            requiresRestart: false
+        )
+        XCTAssertEqual(launchResult, .success)
+
+        XCTAssertEqual(
+            launcher.requests,
+            [
+                DetachedUninstallLaunchRequest(
+                    appBundleURL: appBundleURL,
+                    driverURL: driverURL,
+                    status: ManualUninstallStatus(appInstalled: true, driverInstalled: false),
+                    requiresRestart: false
+                )
+            ]
+        )
+    }
+
+    func testCopiedDetachedUninstallerLauncherCopiesHelperWritesManifestAndLaunchesCopiedAppBundle() async throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "mca-detached-launcher-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let embeddedHelperURL = root
+            .appendingPathComponent("Embedded", isDirectory: true)
+            .appendingPathComponent("MixedCaptureAudioUninstaller.app", isDirectory: true)
+        let embeddedExecutableURL = embeddedHelperURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("MacOS", isDirectory: true)
+            .appendingPathComponent("MixedCaptureAudioUninstaller")
+        let copyRootURL = root.appendingPathComponent("Copies", isDirectory: true)
+        let copyID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        defer {
+            try? fileManager.removeItem(at: root)
+        }
+        try fileManager.createDirectory(
+            at: embeddedExecutableURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("helper".utf8).write(to: embeddedExecutableURL)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: embeddedExecutableURL.path)
+
+        var launchedApplicationURL: URL?
+        var launchedArguments: [String]?
+        let launcher = CopiedDetachedUninstallerLauncher(
+            fileManager: fileManager,
+            embeddedHelperURL: embeddedHelperURL,
+            copyRootURL: copyRootURL,
+            uuidProvider: { copyID },
+            processIdentifier: { 4321 },
+            processRunner: { applicationURL, arguments async throws in
+                launchedApplicationURL = applicationURL
+                launchedArguments = arguments
+            }
+        )
+        let request = DetachedUninstallLaunchRequest(
+            appBundleURL: URL(fileURLWithPath: "/Applications/MixedCaptureAudio.app"),
+            driverURL: URL(fileURLWithPath: "/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver"),
+            status: ManualUninstallStatus(appInstalled: true, driverInstalled: true),
+            requiresRestart: true
+        )
+
+        let launchResult = await launcher.launch(request: request)
+        XCTAssertEqual(launchResult, .success)
+
+        let copiedHelperURL = copyRootURL
+            .appendingPathComponent(copyID.uuidString, isDirectory: true)
+            .appendingPathComponent("MixedCaptureAudioUninstaller.app", isDirectory: true)
+        let copiedExecutableURL = copiedHelperURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("MacOS", isDirectory: true)
+            .appendingPathComponent("MixedCaptureAudioUninstaller")
+        let manifestURL = copyRootURL
+            .appendingPathComponent(copyID.uuidString, isDirectory: true)
+            .appendingPathComponent(DetachedUninstallRequest.manifestFileName)
+
+        XCTAssertTrue(fileManager.fileExists(atPath: copiedExecutableURL.path))
+        XCTAssertEqual(launchedApplicationURL, copiedHelperURL)
+        XCTAssertEqual(launchedArguments, DetachedUninstallRequest.commandLineArguments(manifestURL: manifestURL))
+
+        let manifest = try JSONDecoder().decode(
+            DetachedUninstallRequest.self,
+            from: Data(contentsOf: manifestURL)
+        )
+        XCTAssertEqual(
+            manifest,
+            DetachedUninstallRequest(
+                appPath: "/Applications/MixedCaptureAudio.app",
+                driverPath: "/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver",
+                requiresRestart: true,
+                parentProcessIdentifier: 4321
+            )
+        )
+    }
+
+    func testCopiedDetachedUninstallerLauncherAwaitsAsynchronousAppLaunchBeforeReturning() async throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "mca-detached-launcher-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let embeddedHelperURL = root
+            .appendingPathComponent("Embedded", isDirectory: true)
+            .appendingPathComponent("MixedCaptureAudioUninstaller.app", isDirectory: true)
+        let embeddedExecutableURL = embeddedHelperURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("MacOS", isDirectory: true)
+            .appendingPathComponent("MixedCaptureAudioUninstaller")
+        let copyRootURL = root.appendingPathComponent("Copies", isDirectory: true)
+        defer {
+            try? fileManager.removeItem(at: root)
+        }
+        try fileManager.createDirectory(
+            at: embeddedExecutableURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("helper".utf8).write(to: embeddedExecutableURL)
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: embeddedExecutableURL.path)
+
+        var didFinishLaunch = false
+        let launcher = CopiedDetachedUninstallerLauncher(
+            fileManager: fileManager,
+            embeddedHelperURL: embeddedHelperURL,
+            copyRootURL: copyRootURL,
+            uuidProvider: { UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")! },
+            processRunner: { _, _ async throws in
+                try await Task.sleep(nanoseconds: 20_000_000)
+                didFinishLaunch = true
+            }
+        )
+        let request = DetachedUninstallLaunchRequest(
+            appBundleURL: URL(fileURLWithPath: "/Applications/MixedCaptureAudio.app"),
+            driverURL: URL(fileURLWithPath: "/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver"),
+            status: ManualUninstallStatus(appInstalled: true, driverInstalled: false),
+            requiresRestart: false
+        )
+
+        let launchResult = await launcher.launch(request: request)
+        XCTAssertEqual(launchResult, .success)
+        XCTAssertTrue(didFinishLaunch)
+    }
 }
 
 private final class FakePrerequisiteChecker: PrerequisiteChecking {
@@ -2238,6 +2783,85 @@ private final class FakeLaunchAtStartupController: LaunchAtStartupControlling {
     }
 }
 
+private final class FakeAppUninstallService: AppUninstallServicing {
+    enum Event: Equatable {
+        case removeUserState
+        case launchDetachedUninstaller(status: ManualUninstallStatus, requiresRestart: Bool)
+        case presentCompletion(requiresRestart: Bool)
+        case quitApp
+        case revealApp
+        case revealDriver
+    }
+
+    var userStateRemovalResult: AppUninstallOperationResult = .success
+    var detachedUninstallerLaunchResult: AppUninstallOperationResult = .success
+    var appInstalled = true
+    var driverInstalled = true
+    private(set) var events: [Event] = []
+
+    func removeUserState() -> AppUninstallOperationResult {
+        events.append(.removeUserState)
+        return userStateRemovalResult
+    }
+
+    func launchDetachedUninstaller(status: ManualUninstallStatus, requiresRestart: Bool) async -> AppUninstallOperationResult {
+        events.append(.launchDetachedUninstaller(status: status, requiresRestart: requiresRestart))
+        return detachedUninstallerLaunchResult
+    }
+
+    func revealAppInFinder() {
+        events.append(.revealApp)
+    }
+
+    func revealDriverInFinder() {
+        events.append(.revealDriver)
+    }
+
+    func presentUninstallCompletion(requiresRestart: Bool) {
+        events.append(.presentCompletion(requiresRestart: requiresRestart))
+    }
+
+    func quitApp() {
+        events.append(.quitApp)
+    }
+
+    func isDriverInstalled() -> Bool {
+        driverInstalled
+    }
+
+    func isAppInstalled() -> Bool {
+        appInstalled
+    }
+}
+
+private final class FakeDetachedUninstallerLauncher: DetachedUninstallerLaunching {
+    var result: AppUninstallOperationResult = .success
+    private(set) var requests: [DetachedUninstallLaunchRequest] = []
+
+    func launch(request: DetachedUninstallLaunchRequest) async -> AppUninstallOperationResult {
+        requests.append(request)
+        return result
+    }
+}
+
+@MainActor
+private final class FakeManualUninstallWindowPresenter: ManualUninstallWindowPresenting {
+    enum Event: Equatable {
+        case show(status: ManualUninstallStatus)
+        case close
+    }
+
+    private(set) var events: [Event] = []
+
+    func show(status: ManualUninstallStatus, actions: ManualUninstallWindowActions) {
+        events.append(.show(status: status))
+    }
+
+    func close() {
+        events.append(.close)
+    }
+}
+
 private struct FakeMicrophoneCatalog: MicrophoneCataloging {
     let devices: [MicrophoneDevice]
 
@@ -2293,6 +2917,21 @@ private final class InMemoryAudioLevelSettingsStore: AudioLevelSettingsStoring {
 
     init(settings: AudioLevelSettings = AudioLevelSettings()) {
         self.settings = settings
+    }
+}
+
+private final class CountingAudioLevelSettingsStore: AudioLevelSettingsStoring {
+    private var storedSettings = AudioLevelSettings()
+    private(set) var setCount = 0
+
+    var settings: AudioLevelSettings {
+        get {
+            storedSettings
+        }
+        set {
+            setCount += 1
+            storedSettings = newValue
+        }
     }
 }
 

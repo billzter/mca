@@ -1,0 +1,4 @@
+#include "Uninstaller.xcconfig"
+
+CODE_SIGN_INJECT_BASE_ENTITLEMENTS = YES
+ENABLE_TESTABILITY = YES

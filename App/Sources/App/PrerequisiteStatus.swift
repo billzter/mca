@@ -161,6 +161,54 @@ protocol LaunchAtStartupControlling: AnyObject {
     func setEnabled(_ enabled: Bool) -> LaunchAtStartupSetResult
 }
 
+enum AppUninstallOperationResult: Equatable {
+    case success
+    case failed(String)
+}
+
+struct ManualUninstallStatus: Equatable {
+    let appInstalled: Bool
+    let driverInstalled: Bool
+
+    var isComplete: Bool {
+        !appInstalled && !driverInstalled
+    }
+}
+
+struct ManualUninstallWindowActions {
+    let revealApp: @MainActor () -> Void
+    let revealDriver: @MainActor () -> Void
+    let checkAgain: @MainActor () -> Void
+    let quit: @MainActor () -> Void
+}
+
+enum AppUninstallState: Equatable {
+    case idle
+    case uninstalling
+    case handedOffToDetachedUninstaller(requiresRestart: Bool)
+    case manualRemovalRequired(status: ManualUninstallStatus, requiresRestart: Bool)
+    case completed(requiresRestart: Bool)
+    case failed(String)
+}
+
+@MainActor
+protocol AppUninstallServicing: AnyObject {
+    func removeUserState() -> AppUninstallOperationResult
+    func launchDetachedUninstaller(status: ManualUninstallStatus, requiresRestart: Bool) async -> AppUninstallOperationResult
+    func revealAppInFinder()
+    func revealDriverInFinder()
+    func presentUninstallCompletion(requiresRestart: Bool)
+    func quitApp()
+    func isAppInstalled() -> Bool
+    func isDriverInstalled() -> Bool
+}
+
+@MainActor
+protocol ManualUninstallWindowPresenting: AnyObject {
+    func show(status: ManualUninstallStatus, actions: ManualUninstallWindowActions)
+    func close()
+}
+
 enum LiveMixerStartResult: Equatable {
     case started
     case failed(statusCode: Int32)

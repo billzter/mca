@@ -47,7 +47,12 @@ Diagnostics should help users and developers answer:
 - Is shared memory healthy, missing, stale, invalid, or underrunning?
 - Are app/driver versions compatible?
 
-The menu-bar `Health` row is a current-status surface. It reports recent transport health from a short rolling window so old cumulative counters do not keep the menu degraded after the transport stabilizes. Shared-ring movement while no recorder is actively consuming the virtual input should not degrade menu health. The menu-bar dropdown is a native AppKit `NSMenu` attached to the status item; AppKit owns positioning, clamping, dismissal, keyboard navigation, and overlay/screen-edge behavior. Setup diagnostics and reports keep cumulative session counters for troubleshooting.
+The menu-bar `Health` row is a current-status surface:
+
+- It reports recent transport health from a short rolling window so old cumulative counters do not keep the menu degraded after the transport stabilizes.
+- Shared-ring movement while no recorder is actively consuming the virtual input should not degrade menu health.
+- The menu-bar dropdown is a native AppKit `NSMenu` attached to the status item; AppKit owns positioning, clamping, dismissal, keyboard navigation, and overlay/screen-edge behavior.
+- Setup diagnostics and reports keep cumulative session counters for troubleshooting.
 
 Diagnostics should not answer:
 

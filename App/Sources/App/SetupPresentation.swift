@@ -146,3 +146,95 @@ enum AppLifecyclePresentation {
     static let exposesSystemSettingsScene = false
     static let usesExplicitAppKitDelegateMain = true
 }
+
+struct SetupAdvancedUninstallPresentation: Equatable {
+    let title: String
+    let message: String
+    let actionTitle: String
+    let confirmationTitle: String
+    let confirmationMessage: String
+    let confirmationRemovedItems: [String]
+    let confirmationManualItems: [String]
+    let confirmationKeptItems: [String]
+    let completionTitle: String
+    let completionBaseItems: [String]
+    let completionRestartItem: String
+    let isDestructive: Bool
+
+    static let `default` = SetupAdvancedUninstallPresentation(
+        title: "Advanced",
+        message: "Remove MixedCaptureAudio from this Mac.",
+        actionTitle: "Uninstall MixedCaptureAudio...",
+        confirmationTitle: "Uninstall MixedCaptureAudio?",
+        confirmationMessage: """
+        Uninstall will:
+        - Stop the live mixed-audio session
+        - Remove app settings and support files
+        - Open a Finish Uninstalling window for the app and audio driver
+
+        It will keep:
+        - Microphone and system-audio privacy choices
+
+        Finder may ask for administrator approval when you move installed items to Trash. Restart your Mac after uninstall if the audio driver was installed.
+        """,
+        confirmationRemovedItems: [
+            "Live mixed-audio session",
+            "Login item",
+            "App settings and support files",
+        ],
+        confirmationManualItems: [
+            "MixedCaptureAudio app",
+            "MixedCaptureAudio audio driver",
+        ],
+        confirmationKeptItems: [
+            "Microphone and system-audio privacy choices",
+        ],
+        completionTitle: "Uninstall completed",
+        completionBaseItems: [
+            "App settings and support files were removed.",
+            "MixedCaptureAudio app and audio driver are no longer installed.",
+        ],
+        completionRestartItem: "Restart your Mac to finish unloading the audio driver.",
+        isDestructive: true
+    )
+
+    func completionMessage(requiresRestart: Bool) -> String {
+        let items = completionBaseItems + (requiresRestart ? [completionRestartItem] : [])
+        return items.joined(separator: "\n")
+    }
+}
+
+struct ManualUninstallItemPresentation: Equatable {
+    let title: String
+    let path: String
+}
+
+struct ManualUninstallPresentation: Equatable {
+    let title: String
+    let message: String
+    let appItem: ManualUninstallItemPresentation
+    let driverItem: ManualUninstallItemPresentation
+    let revealButtonTitle: String
+    let checkAgainButtonTitle: String
+    let quitButtonTitle: String
+
+    var orderedItems: [ManualUninstallItemPresentation] {
+        [driverItem, appItem]
+    }
+
+    static let `default` = ManualUninstallPresentation(
+        title: "Finish Uninstalling",
+        message: "Drag each remaining item to Trash in Finder, or select it and press Command-Delete. Finder may ask for an administrator password.",
+        appItem: ManualUninstallItemPresentation(
+            title: "MixedCaptureAudio.app",
+            path: "/Applications/MixedCaptureAudio.app"
+        ),
+        driverItem: ManualUninstallItemPresentation(
+            title: "MixedCaptureAudio.driver",
+            path: "/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver"
+        ),
+        revealButtonTitle: "Show in Finder",
+        checkAgainButtonTitle: "Check Again",
+        quitButtonTitle: "Quit"
+    )
+}
