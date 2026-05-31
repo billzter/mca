@@ -15,7 +15,7 @@ Usage: Scripts/manage-installation.sh <command> [args]
 Commands:
   install-driver [driver-path]  Install a built HAL driver. Defaults to Build/Debug/MixedCaptureAudio.driver.
   uninstall-driver             Remove the installed HAL driver only.
-  uninstall                    Remove the installed app and HAL driver. Preferences and privacy permissions stay intact.
+  uninstall                    Developer fallback: remove the installed HAL driver and app. Preferences and privacy permissions stay intact.
   reload-coreaudio             Restart Core Audio driver hosts for local driver testing.
 USAGE
 }
@@ -61,18 +61,12 @@ uninstall_driver() {
 }
 
 uninstall_all() {
-  printf 'Uninstalling MixedCaptureAudio app and HAL driver.\n'
+  printf 'Developer fallback uninstall for MixedCaptureAudio.\n'
   printf 'Preferences and macOS privacy permissions will be preserved.\n'
+  printf 'For normal product uninstall, use Setup > Advanced > Uninstall MixedCaptureAudio.\n'
 
-  if [ -d "$APP_PATH" ]; then
-    printf 'Removing %s\n' "$APP_PATH"
-    sudo rm -rf "$APP_PATH"
-  else
-    printf 'App is not installed at %s\n' "$APP_PATH"
-  fi
-
-  if [ -e "$APP_PATH" ]; then
-    printf 'Failed to remove %s\n' "$APP_PATH" >&2
+  if pgrep -x MixedCaptureAudio >/dev/null 2>&1; then
+    printf 'MixedCaptureAudio is running. Quit the app, then rerun this command.\n' >&2
     exit 1
   fi
 
@@ -85,6 +79,18 @@ uninstall_all() {
 
   if [ -e "$DRIVER_PATH" ]; then
     printf 'Failed to remove %s\n' "$DRIVER_PATH" >&2
+    exit 1
+  fi
+
+  if [ -d "$APP_PATH" ]; then
+    printf 'Removing %s\n' "$APP_PATH"
+    sudo rm -rf "$APP_PATH"
+  else
+    printf 'App is not installed at %s\n' "$APP_PATH"
+  fi
+
+  if [ -e "$APP_PATH" ]; then
+    printf 'Failed to remove %s\n' "$APP_PATH" >&2
     exit 1
   fi
 

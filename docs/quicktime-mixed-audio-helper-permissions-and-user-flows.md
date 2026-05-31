@@ -382,8 +382,33 @@ Secondary actions:
 ```text
 Check Again
 Update Audio Device
-Uninstall Audio Device
 ```
+
+Uninstall is available from Setup's Advanced section rather than the normal prerequisite row.
+
+The main app flow:
+
+1. Stop capture.
+2. Disable launch at login.
+3. Remove app-owned files.
+4. Copy the bundled uninstaller helper to a unique per-user temporary directory.
+5. Start the copied `.app` through an async LaunchServices handoff.
+6. Quit the main app.
+
+If app-owned state removal fails, setup recovery remains available instead of freezing behind an uninstalling state.
+
+The helper-owned Finish Uninstalling window:
+
+- Runs under the dedicated Dock-app bundle identifier `com.minamiktr.mca.uninstall` with display name `Finish Uninstalling MCA`, so users can recover it after focus changes.
+- Provides normal Quit and Window menu commands.
+- Shows the HAL driver first and app bundle second.
+- Keeps the app row unavailable until the main app process exits.
+- Reveals each real installed item in Finder and lets the user move each remaining item to Trash.
+- Leaves administrator password prompts to Finder/macOS.
+- Keeps the app row unavailable and tells the user to quit MixedCaptureAudio manually before clicking `Check Again` if the parent app process still exists after the bounded wait.
+- Minimizes on close while uninstall is incomplete.
+- Confirms Quit/Command-Q while incomplete, defaults to continuing uninstall, and honors `Quit Anyway`.
+- Shows next-step guidance while removal is in progress, then switches to final completion/restart guidance as native bullet rows after `Check Again` confirms both installed artifacts are gone.
 
 ### Step 3: Request Microphone Access
 
@@ -519,7 +544,12 @@ Minimum menu items:
 - Check System Audio, when unverified
 - Quit
 
-When `Running`, show a visible active indicator in the menu-bar menu and setup/diagnostics window. The menu-bar health line reflects recent transport health while ignoring shared-ring movement when no recorder is active; setup diagnostics retain cumulative session counters. The menu-bar dropdown is a native AppKit `NSMenu` attached to the status item, so AppKit owns anchoring, clamping, dismissal, keyboard navigation, and overlay/screen-edge behavior.
+When `Running`:
+
+- Show a visible active indicator in the menu-bar menu and setup/diagnostics window.
+- Let the menu-bar health line reflect recent transport health while ignoring shared-ring movement when no recorder is active.
+- Retain cumulative session counters in setup diagnostics.
+- Use a native AppKit `NSMenu` attached to the status item so AppKit owns anchoring, clamping, dismissal, keyboard navigation, and overlay/screen-edge behavior.
 
 Do not expose start/stop session controls in the main UX. If the helper is running and durable setup is complete, the app quietly publishes the live mixed input; Quit is the user-visible stop.
 

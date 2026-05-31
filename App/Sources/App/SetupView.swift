@@ -147,6 +147,7 @@ struct SetupView: View {
             if !prioritizesSystemAudioPanel {
                 SystemAudioAccessPanel(model: model)
             }
+            AdvancedUninstallPanel(model: model)
 
             Button {
                 model.refreshPrerequisites()
@@ -730,6 +731,49 @@ private struct MicrophoneAccessPanel: View {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+}
+
+private struct AdvancedUninstallPanel: View {
+    @ObservedObject var model: AppStatusModel
+    @State private var isConfirmingUninstall = false
+    private let presentation = SetupAdvancedUninstallPresentation.default
+
+    var body: some View {
+        ActionPanel(
+            title: presentation.title,
+            message: model.uninstallGuidance,
+            isVisible: true
+        ) {
+            VStack(alignment: .trailing, spacing: 8) {
+                HStack(spacing: 8) {
+                    Button(role: .destructive) {
+                        isConfirmingUninstall = true
+                    } label: {
+                        Label(presentation.actionTitle, systemImage: "trash")
+                    }
+                    .disabled(!model.canStartUninstall)
+                }
+            }
+            .confirmationDialog(
+                presentation.confirmationTitle,
+                isPresented: $isConfirmingUninstall,
+                titleVisibility: .visible
+            ) {
+                Button("Uninstall", role: .destructive) {
+                    Task {
+                        await model.performUninstall()
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(confirmationMessage)
+            }
+        }
+    }
+
+    private var confirmationMessage: String {
+        presentation.confirmationMessage
     }
 }
 

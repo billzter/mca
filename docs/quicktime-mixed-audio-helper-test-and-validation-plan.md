@@ -392,6 +392,13 @@ Coverage:
 - Installed-but-not-reloaded driver maps to `InstalledButNeedsReload` or `RestartRequired`.
 - QuickTime open during driver update produces guidance rather than silent replacement.
 - Capture running during attempted driver update is stopped or blocked before installer launch.
+- Setup Advanced uninstall uses list-shaped confirmation copy.
+- Setup Advanced uninstall discards final shared memory, disables login at startup, removes app-owned state, starts a copied uninstaller helper through an async LaunchServices handoff, records helper handoff separately from completion, and quits the main app.
+- Setup Advanced uninstall preserves privacy choices, avoids re-writing preferences after state removal, and leaves normal setup recovery available after failed state removal.
+- The helper finish window runs as a temporary regular Dock app under bundle identifier `com.minamiktr.mca.uninstall` with display name `Finish Uninstalling MCA`.
+- The helper finish window has native Quit and Window menu commands, shows the HAL driver first and app bundle second, keeps the app row unavailable until the parent app process exits, and surfaces a wrapping manual-quit backstop after a bounded wait.
+- The helper finish window prevents Close from terminating the helper while work remains, confirms incomplete Quit/Command-Q before honoring an explicit quit, reveals the real installed artifacts in Finder, and leaves privileged Trash moves to Finder/macOS authorization.
+- The helper finish window shows next-step guidance while removal is in progress, checks again, then shows native bullet-row completion guidance after both installed artifacts are gone.
 
 Acceptance:
 
@@ -400,6 +407,7 @@ Acceptance:
 - App-held live mixer activity assertions begin after successful native mixer start and end on stop, failed restart, synchronous termination stop, or final shared-memory discard.
 - Driver update path uses signed/notarized package installation.
 - User receives clear reload/restart guidance when needed.
+- Uninstall requires clear user confirmation and restart guidance when a driver was present.
 
 Detailed update policy is documented in:
 

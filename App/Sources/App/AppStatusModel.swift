@@ -14,6 +14,8 @@ final class AppStatusModel: ObservableObject {
     private let audioLevelSettingsStore: AudioLevelSettingsStoring
     private let systemAudioAccessStore: SystemAudioAccessStoring
     private let launchAtStartupController: LaunchAtStartupControlling
+    private let uninstallService: AppUninstallServicing
+    private let manualUninstallWindowPresenter: ManualUninstallWindowPresenting
 
     @Published var sessionState: CaptureSessionState = .stopped
     @Published var liveMixerState: LiveMixerState = .stopped
@@ -43,6 +45,7 @@ final class AppStatusModel: ObservableObject {
     @Published var sharedRingStats: SharedRingStats = .empty
     @Published var launchAtStartupStatus: LaunchAtStartupStatus = .unknown
     @Published var launchAtStartupErrorMessage: String?
+    @Published private(set) var uninstallState: AppUninstallState = .idle
     private var runningMixerConfiguration: LiveMixerStartConfiguration?
     private var pendingMixerConfiguration: LiveMixerStartConfiguration?
     private var mixerCommandGeneration: UInt64 = 0
@@ -65,7 +68,9 @@ final class AppStatusModel: ObservableObject {
         appAudioSelectionStore: AppAudioSelectionStoring = VolatileAppAudioSelectionStore(),
         audioLevelSettingsStore: AudioLevelSettingsStoring = VolatileAudioLevelSettingsStore(),
         systemAudioAccessStore: SystemAudioAccessStoring = VolatileSystemAudioAccessStore(),
-        launchAtStartupController: LaunchAtStartupControlling = NullLaunchAtStartupController()
+        launchAtStartupController: LaunchAtStartupControlling = NullLaunchAtStartupController(),
+        uninstallService: AppUninstallServicing? = nil,
+        manualUninstallWindowPresenter: ManualUninstallWindowPresenting? = nil
     ) {
         self.prerequisiteChecker = prerequisiteChecker
         self.microphonePermissionRequester = microphonePermissionRequester
@@ -78,6 +83,8 @@ final class AppStatusModel: ObservableObject {
         self.audioLevelSettingsStore = audioLevelSettingsStore
         self.systemAudioAccessStore = systemAudioAccessStore
         self.launchAtStartupController = launchAtStartupController
+        self.uninstallService = uninstallService ?? NullAppUninstallService()
+        self.manualUninstallWindowPresenter = manualUninstallWindowPresenter ?? NullManualUninstallWindowPresenter()
         captureMode = appAudioSelectionStore.captureMode
         selectedAppBundleIDs = appAudioSelectionStore.selectedAppBundleIDs
         audioLevelSettings = audioLevelSettingsStore.settings
@@ -127,6 +134,51 @@ final class AppStatusModel: ObservableObject {
 
     var setupSummary: String {
         "Driver \(driverStatus.rawValue), microphone \(microphonePermission.rawValue), system audio \(systemAudioAccess.rawValue)"
+    }
+
+    var isUninstalling: Bool {
+        switch uninstallState {
+        case .idle, .failed:
+            false
+        case .uninstalling, .handedOffToDetachedUninstaller, .manualRemovalRequired, .completed:
+            true
+        }
+    }
+
+    var uninstallGuidance: String {
+        switch uninstallState {
+        case .idle:
+            return SetupAdvancedUninstallPresentation.default.message
+        case .uninstalling:
+            return "Uninstalling MixedCaptureAudio..."
+        case .handedOffToDetachedUninstaller:
+            return "Finish uninstalling in the separate helper window."
+        case .manualRemovalRequired:
+            return "Finish uninstalling in the separate Finder checklist window."
+        case let .completed(requiresRestart):
+            if requiresRestart {
+                return "Uninstall completed. Restart your Mac to finish unloading the audio driver."
+            }
+            return "Uninstall completed."
+        case let .failed(message):
+            return message
+        }
+    }
+
+    var canStartUninstall: Bool {
+        switch uninstallState {
+        case .uninstalling, .handedOffToDetachedUninstaller, .completed:
+            false
+        case .idle, .manualRemovalRequired, .failed:
+            true
+        }
+    }
+
+    var needsManualUninstallRemoval: Bool {
+        if case .manualRemovalRequired = uninstallState {
+            return true
+        }
+        return false
     }
 
     var microphoneStatusText: String {
@@ -287,11 +339,17 @@ final class AppStatusModel: ObservableObject {
     }
 
     func refreshPrerequisites() {
+        guard !isUninstalling else {
+            return
+        }
         sessionState = .checkingPrerequisites
         apply(snapshot: prerequisiteChecker.snapshot())
     }
 
     func refreshLaunchAtStartupStatus() {
+        guard !isUninstalling else {
+            return
+        }
         launchAtStartupStatus = launchAtStartupController.currentStatus()
         if launchAtStartupStatus != .failed {
             launchAtStartupErrorMessage = nil
@@ -299,6 +357,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func toggleLaunchAtStartup() {
+        guard !isUninstalling else {
+            return
+        }
         let shouldEnable = launchAtStartupStatus != .enabled
         switch launchAtStartupController.setEnabled(shouldEnable) {
         case let .success(status):
@@ -311,11 +372,17 @@ final class AppStatusModel: ObservableObject {
     }
 
     func recoverAfterDeviceConfigurationChange() {
+        guard !isUninstalling else {
+            return
+        }
         sessionState = .checkingPrerequisites
         apply(snapshot: prerequisiteChecker.snapshot(), forceMixerRestart: true)
     }
 
     func recoverAfterApplicationAudioSourceChange(changedBundleIDs: Set<String> = []) {
+        guard !isUninstalling else {
+            return
+        }
         let previousSignature = selectedAppAvailabilitySignature
         refreshAppAudioSources()
         sessionState = resolvedSessionState(durableSetupComplete: hasCompletedDurableSetup)
@@ -339,6 +406,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func selectMicrophone(id: String) {
+        guard !isUninstalling else {
+            return
+        }
         guard availableMicrophones.contains(where: { $0.id == id }) else {
             return
         }
@@ -351,6 +421,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func selectCaptureMode(_ mode: ProgramAudioCaptureMode) {
+        guard !isUninstalling else {
+            return
+        }
         guard captureMode != mode else {
             return
         }
@@ -363,6 +436,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func toggleAppAudioSource(bundleID: String) {
+        guard !isUninstalling else {
+            return
+        }
         guard appAudioSourceItems.contains(where: { $0.bundleID == bundleID }) else {
             return
         }
@@ -381,6 +457,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func setSystemAudioLevelDecibels(_ decibels: Double) {
+        guard !isUninstalling else {
+            return
+        }
         updateAudioLevelSettings(
             AudioLevelSettings(
                 systemDecibels: decibels,
@@ -391,6 +470,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func setMicrophoneLevelDecibels(_ decibels: Double) {
+        guard !isUninstalling else {
+            return
+        }
         updateAudioLevelSettings(
             AudioLevelSettings(
                 systemDecibels: audioLevelSettings.systemDecibels,
@@ -401,6 +483,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func setEnhanceVoice(_ isEnabled: Bool) {
+        guard !isUninstalling else {
+            return
+        }
         updateAudioLevelSettings(
             AudioLevelSettings(
                 systemDecibels: audioLevelSettings.systemDecibels,
@@ -411,6 +496,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func moveMicrophonePriority(id: String, direction: MicrophonePriorityMoveDirection) {
+        guard !isUninstalling else {
+            return
+        }
         var ids = normalizedPriorityIDs(from: microphoneSelectionStore.preferredMicrophoneIDs)
         guard let index = ids.firstIndex(of: id) else {
             return
@@ -437,6 +525,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func moveMicrophonePriority(from source: IndexSet, to destination: Int) {
+        guard !isUninstalling else {
+            return
+        }
         var ids = normalizedPriorityIDs(from: microphoneSelectionStore.preferredMicrophoneIDs)
         moveElements(in: &ids, from: source, to: destination)
         microphoneSelectionStore.preferredMicrophoneIDs = ids
@@ -448,6 +539,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func moveMicrophonePriority(draggedID: String, before targetID: String) {
+        guard !isUninstalling else {
+            return
+        }
         guard draggedID != targetID else {
             return
         }
@@ -471,6 +565,9 @@ final class AppStatusModel: ObservableObject {
         toInsertionIndex insertionIndex: Int,
         reconcileMixer: Bool = true
     ) {
+        guard !isUninstalling else {
+            return
+        }
         var ids = normalizedPriorityIDs(from: microphoneSelectionStore.preferredMicrophoneIDs)
         guard let sourceIndex = ids.firstIndex(of: draggedID) else {
             return
@@ -498,6 +595,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func reconcileLiveMixerAfterPriorityChange() {
+        guard !isUninstalling else {
+            return
+        }
         reconcileLiveMixer()
     }
 
@@ -589,6 +689,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func requestMicrophoneAccess() async {
+        guard !isUninstalling else {
+            return
+        }
         guard canRequestMicrophoneAccess else {
             refreshPrerequisites()
             return
@@ -605,6 +708,9 @@ final class AppStatusModel: ObservableObject {
     }
 
     func checkSystemAudioAccess() async {
+        guard !isUninstalling else {
+            return
+        }
         guard canCheckSystemAudioAccess else {
             return
         }
@@ -632,12 +738,109 @@ final class AppStatusModel: ObservableObject {
     }
 
     func markSystemAudioReceivingFromLiveProof() {
+        guard !isUninstalling else {
+            return
+        }
         guard systemAudioAccess != .receivingAudio else {
             systemAudioAccessStore.hasVerifiedSystemAudioAccess = true
             return
         }
         systemAudioAccess = .receivingAudio
         systemAudioAccessStore.hasVerifiedSystemAudioAccess = true
+    }
+
+    func performUninstall() async {
+        guard uninstallState != .uninstalling else {
+            return
+        }
+        if needsManualUninstallRemoval {
+            await checkManualUninstallRemoval()
+            return
+        }
+
+        uninstallState = .uninstalling
+        discardLiveMixerSharedMemory()
+        _ = launchAtStartupController.setEnabled(false)
+
+        switch uninstallService.removeUserState() {
+        case .success:
+            break
+        case let .failed(message):
+            uninstallState = .failed(message)
+            return
+        }
+
+        let status = currentManualUninstallStatus()
+        await handOffToDetachedUninstallerOrFallback(status: status, requiresRestart: status.driverInstalled)
+    }
+
+    func revealAppForManualRemoval() {
+        uninstallService.revealAppInFinder()
+    }
+
+    func revealDriverForManualRemoval() {
+        uninstallService.revealDriverInFinder()
+    }
+
+    func checkManualUninstallRemoval() async {
+        guard case let .manualRemovalRequired(_, requiresRestart) = uninstallState else {
+            return
+        }
+        presentManualRemovalOrComplete(status: currentManualUninstallStatus(), requiresRestart: requiresRestart)
+    }
+
+    private func currentManualUninstallStatus() -> ManualUninstallStatus {
+        ManualUninstallStatus(
+            appInstalled: uninstallService.isAppInstalled(),
+            driverInstalled: uninstallService.isDriverInstalled()
+        )
+    }
+
+    private func handOffToDetachedUninstallerOrFallback(status: ManualUninstallStatus, requiresRestart: Bool) async {
+        guard !status.isComplete else {
+            presentManualRemovalOrComplete(status: status, requiresRestart: requiresRestart)
+            return
+        }
+
+        switch await uninstallService.launchDetachedUninstaller(status: status, requiresRestart: requiresRestart) {
+        case .success:
+            manualUninstallWindowPresenter.close()
+            uninstallState = .handedOffToDetachedUninstaller(requiresRestart: requiresRestart)
+            uninstallService.quitApp()
+        case .failed:
+            presentManualRemovalOrComplete(status: status, requiresRestart: requiresRestart)
+        }
+    }
+
+    private func presentManualRemovalOrComplete(status: ManualUninstallStatus, requiresRestart: Bool) {
+        guard !status.isComplete else {
+            manualUninstallWindowPresenter.close()
+            uninstallState = .completed(requiresRestart: requiresRestart)
+            uninstallService.presentUninstallCompletion(requiresRestart: requiresRestart)
+            uninstallService.quitApp()
+            return
+        }
+
+        uninstallState = .manualRemovalRequired(status: status, requiresRestart: requiresRestart)
+        manualUninstallWindowPresenter.show(
+            status: status,
+            actions: ManualUninstallWindowActions(
+                revealApp: { [weak self] in
+                    self?.revealAppForManualRemoval()
+                },
+                revealDriver: { [weak self] in
+                    self?.revealDriverForManualRemoval()
+                },
+                checkAgain: { [weak self] in
+                    Task {
+                        await self?.checkManualUninstallRemoval()
+                    }
+                },
+                quit: { [weak self] in
+                    self?.uninstallService.quitApp()
+                }
+            )
+        )
     }
 
     private func apply(snapshot: PrerequisiteSnapshot, forceMixerRestart: Bool = false) {
@@ -1068,6 +1271,39 @@ private final class NullLiveMixerController: LiveMixerControlling {
     @MainActor func isVirtualAudioDeviceRunning() -> Bool {
         false
     }
+}
+
+private final class NullAppUninstallService: AppUninstallServicing {
+    func removeUserState() -> AppUninstallOperationResult {
+        .success
+    }
+
+    func launchDetachedUninstaller(status: ManualUninstallStatus, requiresRestart: Bool) async -> AppUninstallOperationResult {
+        .success
+    }
+
+    func revealAppInFinder() {}
+
+    func revealDriverInFinder() {}
+
+    func presentUninstallCompletion(requiresRestart: Bool) {}
+
+    func quitApp() {}
+
+    func isAppInstalled() -> Bool {
+        false
+    }
+
+    func isDriverInstalled() -> Bool {
+        false
+    }
+}
+
+@MainActor
+private final class NullManualUninstallWindowPresenter: ManualUninstallWindowPresenting {
+    func show(status: ManualUninstallStatus, actions: ManualUninstallWindowActions) {}
+
+    func close() {}
 }
 
 private struct EmptyMicrophoneCatalog: MicrophoneCataloging {

@@ -41,6 +41,7 @@ Keep these identifiers stable unless an intentionally incompatible release plan 
 | Item | Value |
 | --- | --- |
 | App bundle identifier | `com.minamiktr.mca` |
+| Uninstaller helper bundle identifier | `com.minamiktr.mca.uninstall` |
 | HAL driver bundle identifier | `com.minamiktr.mca.driver` |
 | Virtual input name | `Mixed Capture Audio` |
 | Virtual device UID | `com.minamiktr.mca.device.MixedCaptureAudio` |
@@ -201,7 +202,15 @@ The app starts and maintains the live mixer as an app lifecycle responsibility. 
 
 System audio verification requires audible, unmuted system playback during the check. A silent Mac can produce an inconclusive or failed access check even when permission is otherwise available.
 
-The menu-bar status menu is a native `NSStatusItem.menu`/`NSMenu` surface. AppKit owns dropdown positioning, clamping, dismissal, keyboard navigation, and menu behavior; the app only supplies status rows and actions. The menu is rebuilt on open from current state and updates visible header, status-row, and setting-toggle state while open. Its `Health` row reports recent transport health over a short rolling window and can return to `Healthy` after earlier underruns or queue drops stop. When no recorder is actively consuming the virtual input, shared-ring movement should not degrade the menu health row. Setup diagnostics retain cumulative session health counters for troubleshooting and diagnostic reports. The menu-bar item uses its natural AppKit width with a fixed rendered status-icon size.
+The menu-bar status menu is a native `NSStatusItem.menu`/`NSMenu` surface:
+
+- AppKit owns dropdown positioning, clamping, dismissal, keyboard navigation, and menu behavior.
+- The app supplies only status rows and actions.
+- The menu is rebuilt on open from current state and updates visible header, status-row, and setting-toggle state while open.
+- The `Health` row reports recent transport health over a short rolling window and can return to `Healthy` after earlier underruns or queue drops stop.
+- Shared-ring movement should not degrade the menu health row when no recorder is actively consuming the virtual input.
+- Setup diagnostics retain cumulative session health counters for troubleshooting and diagnostic reports.
+- The menu-bar item uses its natural AppKit width with a fixed rendered status-icon size.
 
 Current setup behavior:
 
@@ -262,7 +271,6 @@ Scripts/build-package.sh --sign --notarize
 Scripts/manage-installation.sh install-driver
 Scripts/manage-installation.sh reload-coreaudio
 Scripts/manage-installation.sh uninstall-driver
-Scripts/manage-installation.sh uninstall
 ```
 
 No shell script should exist unless it is active product plumbing that cannot reasonably live in Xcode, Cargo, SwiftPM, GitHub Actions, or the relevant native tool.
@@ -309,7 +317,6 @@ For cleanup:
 
 ```sh
 Scripts/manage-installation.sh uninstall-driver
-Scripts/manage-installation.sh uninstall
 ```
 
 Some installed-driver and release verification commands interact with system locations, Core Audio daemons, keychains, certificates, or notarization services. Run those deliberately and expect admin prompts or environment variables where appropriate.
@@ -332,7 +339,43 @@ The HAL driver is discovered from the system HAL plug-ins directory and can rema
 
 Use `Scripts/manage-installation.sh reload-coreaudio` for that development flow. User-facing product flows should not silently kill Core Audio; the app should present clear reload/restart guidance.
 
-`Scripts/manage-installation.sh` is the developer install lifecycle helper. It can install the built driver, reload Core Audio for local testing, remove only the driver, or uninstall the app and driver while preserving preferences and macOS privacy permission records.
+`Scripts/manage-installation.sh` is the developer install lifecycle helper. It can:
+
+- install the built driver
+- reload Core Audio for local testing
+- remove only the driver
+- clean up local installed artifacts
+
+Its `uninstall` command:
+
+- Refuses to continue while `MixedCaptureAudio` is still running.
+- Removes the HAL driver first.
+- Removes the app bundle second.
+
+The user-facing uninstall path lives in Setup > Advanced and removes app-owned preferences/support files while preserving macOS privacy permission records.
+
+In-app uninstall does the main-app cleanup first:
+
+1. Stops the live mixer and discards `/mca.mix.v1`.
+2. Disables the login item.
+3. Removes app-owned state.
+4. Copies `MixedCaptureAudio.app/Contents/Helpers/MixedCaptureAudioUninstaller.app` to a unique per-user temporary directory.
+5. Starts the copied `.app` through an async LaunchServices handoff.
+6. Quits the main app.
+
+A failed state-removal attempt returns to normal setup recovery instead of blocking the setup UI.
+
+The helper-owned finish window:
+
+- Uses the dedicated Dock-app bundle identifier `com.minamiktr.mca.uninstall` and display name `Finish Uninstalling MCA`.
+- Provides normal Quit and Window menu commands.
+- Shows `/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver` first and `/Applications/MixedCaptureAudio.app` second.
+- Keeps the app row unavailable until the main app process exits.
+- Surfaces a wrapped manual-quit backstop after a bounded wait.
+- Reveals the real items in Finder and lets Finder/macOS own any administrator password prompt.
+- Minimizes on close while incomplete.
+- Confirms Quit/Command-Q while incomplete with `Continue Uninstalling` as the safe default and `Quit Anyway` as the explicit exit.
+- Shows next-step guidance while removal is in progress, then switches to native bullet-row final completion and restart guidance after `Check Again` confirms both installed artifacts are gone.
 
 ## Release And Signing Inputs
 

@@ -56,6 +56,8 @@ done
 CONFIGURATION="${CONFIGURATION:-Release}"
 APP_DIR="Build/$CONFIGURATION/MixedCaptureAudio.app"
 DRIVER_DIR="Build/$CONFIGURATION/MixedCaptureAudio.driver"
+HELPER_APP_RELATIVE_PATH="Contents/Helpers/MixedCaptureAudioUninstaller.app"
+HELPER_EXECUTABLE_RELATIVE_PATH="$HELPER_APP_RELATIVE_PATH/Contents/MacOS/MixedCaptureAudioUninstaller"
 XCODE_DERIVED_DATA="${XCODE_DERIVED_DATA:-Build/XcodeDerivedData}"
 if [ "${XCODE_DESTINATION+x}" != "x" ]; then
   if [ "$CONFIGURATION" = "Release" ]; then
@@ -296,6 +298,7 @@ assert_release_build_architectures() {
   fi
 
   assert_arch_slices "$APP_DIR/Contents/MacOS/MixedCaptureAudio" "app executable"
+  assert_arch_slices "$APP_DIR/$HELPER_EXECUTABLE_RELATIVE_PATH" "uninstaller helper executable"
   assert_arch_slices "$DRIVER_DIR/Contents/MacOS/MixedCaptureAudio" "HAL driver executable"
   assert_arch_slices "$ROOT_DIR/Generated/lib/release/libmixed_audio_engine.a" "Rust static library"
 }
@@ -306,6 +309,7 @@ assert_release_payload_architectures() {
   fi
 
   assert_arch_slices "$PAYLOAD_VERIFY_ROOT/Payload/Applications/MixedCaptureAudio.app/Contents/MacOS/MixedCaptureAudio" "packaged app executable"
+  assert_arch_slices "$PAYLOAD_VERIFY_ROOT/Payload/Applications/MixedCaptureAudio.app/$HELPER_EXECUTABLE_RELATIVE_PATH" "packaged uninstaller helper executable"
   assert_arch_slices "$PAYLOAD_VERIFY_ROOT/Payload/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver/Contents/MacOS/MixedCaptureAudio" "packaged HAL driver executable"
 }
 
@@ -463,10 +467,12 @@ fi
 build_app
 build_driver
 codesign --verify --deep --strict --verbose=4 "$APP_DIR" >/dev/null
+codesign --verify --deep --strict --verbose=4 "$APP_DIR/$HELPER_APP_RELATIVE_PATH" >/dev/null
 codesign --verify --deep --strict --verbose=4 "$DRIVER_DIR" >/dev/null
 assert_release_build_architectures
 if [ "$SIGN_PACKAGE" = "1" ]; then
   assert_distribution_entitlements "$APP_DIR/Contents/MacOS/MixedCaptureAudio"
+  assert_distribution_entitlements "$APP_DIR/$HELPER_EXECUTABLE_RELATIVE_PATH"
 fi
 
 APP_VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$APP_DIR/Contents/Info.plist")"

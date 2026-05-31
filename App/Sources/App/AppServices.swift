@@ -2,11 +2,127 @@ import AppKit
 import AVFoundation
 import Combine
 import CoreAudio
+import ServiceManagement
 import SwiftUI
 
 enum AppTerminationSharedMemoryPolicy {
     static func shouldDiscardSharedMemory() -> Bool {
         false
+    }
+}
+
+@MainActor
+final class AppUninstallService: AppUninstallServicing {
+    private let bundleID = "com.minamiktr.mca"
+    private let legacySupportName = "MixedCaptureAudio"
+    private let preferencesDomain: String
+    private let driverURL: URL
+    private let appBundleURL: URL
+    private let userOwnedRemovalURLOverride: [URL]?
+    private let revealURLsInFinder: ([URL]) -> Void
+    private let detachedUninstallerLauncher: DetachedUninstallerLaunching
+    private let fileManager: FileManager
+    private let userDefaults: UserDefaults
+
+    init(
+        fileManager: FileManager = .default,
+        userDefaults: UserDefaults = .standard,
+        workspace: NSWorkspace = .shared,
+        preferencesDomain: String = "com.minamiktr.mca",
+        driverURL: URL = URL(fileURLWithPath: "/Library/Audio/Plug-Ins/HAL/MixedCaptureAudio.driver"),
+        appBundleURL: URL = Bundle.main.bundleURL,
+        userOwnedRemovalURLs: [URL]? = nil,
+        revealURLsInFinder: (([URL]) -> Void)? = nil,
+        detachedUninstallerLauncher: DetachedUninstallerLaunching = CopiedDetachedUninstallerLauncher()
+    ) {
+        self.fileManager = fileManager
+        self.userDefaults = userDefaults
+        self.preferencesDomain = preferencesDomain
+        self.driverURL = driverURL
+        self.appBundleURL = appBundleURL
+        userOwnedRemovalURLOverride = userOwnedRemovalURLs
+        self.detachedUninstallerLauncher = detachedUninstallerLauncher
+        self.revealURLsInFinder = revealURLsInFinder ?? { urls in
+            workspace.activateFileViewerSelecting(urls)
+        }
+    }
+
+    func removeUserState() -> AppUninstallOperationResult {
+        userDefaults.removePersistentDomain(forName: preferencesDomain)
+
+        var failures: [String] = []
+        for url in userOwnedRemovalURLs() where fileManager.fileExists(atPath: url.path) {
+            do {
+                try fileManager.removeItem(at: url)
+            } catch {
+                failures.append(url.path)
+            }
+        }
+
+        guard failures.isEmpty else {
+            return .failed("Could not remove \(failures.joined(separator: ", "))")
+        }
+        return .success
+    }
+
+    func launchDetachedUninstaller(status: ManualUninstallStatus, requiresRestart: Bool) async -> AppUninstallOperationResult {
+        await detachedUninstallerLauncher.launch(
+            request: DetachedUninstallLaunchRequest(
+                appBundleURL: appBundleURL,
+                driverURL: driverURL,
+                status: status,
+                requiresRestart: requiresRestart
+            )
+        )
+    }
+
+    func presentUninstallCompletion(requiresRestart: Bool) {
+        let presentation = SetupAdvancedUninstallPresentation.default
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = presentation.completionTitle
+        alert.informativeText = presentation.completionMessage(requiresRestart: requiresRestart)
+        alert.addButton(withTitle: "Quit MixedCaptureAudio")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    func quitApp() {
+        NSApp.terminate(nil)
+    }
+
+    func revealAppInFinder() {
+        revealURLsInFinder([appBundleURL])
+    }
+
+    func revealDriverInFinder() {
+        revealURLsInFinder([driverURL])
+    }
+
+    func isAppInstalled() -> Bool {
+        fileManager.fileExists(atPath: appBundleURL.path)
+    }
+
+    func isDriverInstalled() -> Bool {
+        fileManager.fileExists(atPath: driverURL.path)
+    }
+
+    private func userOwnedRemovalURLs() -> [URL] {
+        if let userOwnedRemovalURLOverride {
+            return userOwnedRemovalURLOverride
+        }
+
+        var urls: [URL] = []
+        if let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            urls.append(appSupport.appendingPathComponent(bundleID, isDirectory: true))
+            urls.append(appSupport.appendingPathComponent(legacySupportName, isDirectory: true))
+        }
+        if let caches = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            urls.append(caches.appendingPathComponent(bundleID, isDirectory: true))
+            urls.append(caches.appendingPathComponent(legacySupportName, isDirectory: true))
+        }
+        urls.append(fileManager.temporaryDirectory.appendingPathComponent("_mca.mix.v1.producer.lock"))
+        return urls
     }
 }
 
@@ -42,6 +158,7 @@ final class AppServices: ObservableObject {
 
     private init() {
         let liveMixerController = AppLiveMixerController()
+        let manualUninstallWindowPresenter = ManualUninstallWindowPresenter()
         let statusModel = AppStatusModel(
             prerequisiteChecker: AppPrerequisiteChecker(),
             microphonePermissionRequester: AppMicrophonePermissionRequester(),
@@ -53,7 +170,9 @@ final class AppServices: ObservableObject {
             appAudioSelectionStore: AppAudioSelectionStore(),
             audioLevelSettingsStore: AppAudioLevelSettingsStore(),
             systemAudioAccessStore: AppSystemAudioAccessStore(),
-            launchAtStartupController: AppLaunchAtStartupController()
+            launchAtStartupController: AppLaunchAtStartupController(),
+            uninstallService: AppUninstallService(),
+            manualUninstallWindowPresenter: manualUninstallWindowPresenter
         )
         let systemAudioAutoVerifier = SystemAudioAutoVerifier {
             statusModel.markSystemAudioReceivingFromLiveProof()
@@ -470,5 +589,134 @@ private final class SetupWindowPresenter: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         sourceLevelMeterPollingController?.stop()
+    }
+}
+
+@MainActor
+private final class ManualUninstallWindowPresenter: NSObject, ManualUninstallWindowPresenting, NSWindowDelegate {
+    private var window: NSWindow?
+
+    func show(status: ManualUninstallStatus, actions: ManualUninstallWindowActions) {
+        let uninstallWindow = window ?? makeWindow()
+        window = uninstallWindow
+        uninstallWindow.contentView = NSHostingView(rootView: ManualUninstallView(
+            status: status,
+            actions: actions
+        ))
+        uninstallWindow.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func close() {
+        window?.close()
+        window = nil
+    }
+
+    private func makeWindow() -> NSWindow {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 380),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = ManualUninstallPresentation.default.title
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        return window
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        window = nil
+    }
+}
+
+private struct ManualUninstallView: View {
+    let status: ManualUninstallStatus
+    let actions: ManualUninstallWindowActions
+    private let presentation = ManualUninstallPresentation.default
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(presentation.title)
+                    .font(.title2.weight(.semibold))
+                Text(presentation.message)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(spacing: 10) {
+                ManualUninstallItemRow(
+                    item: presentation.driverItem,
+                    isInstalled: status.driverInstalled,
+                    symbolName: "puzzlepiece.extension",
+                    revealButtonTitle: presentation.revealButtonTitle,
+                    reveal: actions.revealDriver
+                )
+                ManualUninstallItemRow(
+                    item: presentation.appItem,
+                    isInstalled: status.appInstalled,
+                    symbolName: "app",
+                    revealButtonTitle: presentation.revealButtonTitle,
+                    reveal: actions.revealApp
+                )
+            }
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Button(presentation.quitButtonTitle) {
+                    actions.quit()
+                }
+                Spacer()
+                Button {
+                    actions.checkAgain()
+                } label: {
+                    Label(presentation.checkAgainButtonTitle, systemImage: "arrow.clockwise")
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 520, minHeight: 340)
+    }
+}
+
+private struct ManualUninstallItemRow: View {
+    let item: ManualUninstallItemPresentation
+    let isInstalled: Bool
+    let symbolName: String
+    let revealButtonTitle: String
+    let reveal: @MainActor () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isInstalled ? symbolName : "checkmark.circle.fill")
+                .font(.system(size: 32))
+                .foregroundColor(isInstalled ? .primary : .green)
+                .frame(width: 40, height: 40)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .font(.headline)
+                Text(isInstalled ? item.path : "Removed")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 12)
+
+            Button(revealButtonTitle) {
+                reveal()
+            }
+            .disabled(!isInstalled)
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
